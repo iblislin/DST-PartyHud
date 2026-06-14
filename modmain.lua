@@ -1,13 +1,8 @@
--- [PATCHED for DST 736959] fix1: dctoggle->customexitdelta (crash on playerexit); fix2: removed debug print. See PartyHUD orig brianchenito/PartyHud v0.985.
+-- [PartyHud 2026 v2026.5] modernized fork of brianchenito/PartyHud v0.985.
+-- Robustness pass: guarded HUD-refresh handlers, bounded + userid-stable badge mapping,
+-- trailing-slot clearing, ghost-state seeding on (re)spawn/shard-migration, and removal of
+-- the dead playerexited/customexitdelta path (onremove covers leave-refresh).
 _G = GLOBAL
---_G.CHEATS_ENABLED = true--disable for push to live
---_G.require( 'debugkeys' )--disable for push to live
-
---print(AllPlayers[1]:HasTag("playerghost"))
-
---AllPlayers[1]:PushEvent("respawnfromghost")
---print(AllPlayers[1].components.health:IsDead())
-
 
 -- pulls setting for hud configs from modinfo
 local layout=GetModConfigData("layout")
@@ -27,25 +22,23 @@ if positional==0 then -- standard with minimap
 	phud_xpos= (-100)
 	phud_ypos= (-70)
 elseif positional==1 then --extra large minimap
-	phud_xpos= (-650) 
+	phud_xpos= (-650)
 	phud_ypos= (50)
 else--no minimap
-	phud_xpos= (-100) 
+	phud_xpos= (-100)
 	phud_ypos= (120)
 end
 
-
---local scale=_G
 --constructor for badge array
 local function onstatusdisplaysconstruct(self)
 
 	self.badgearray = {}
-		--instance badges for players. 
+	--instance one badge per slot
 	for i = 1, GLOBAL.TheNet:GetDefaultMaxPlayers(), 1 do
 		self.badgearray[i]=self:AddChild(phud_custombadge(self,self.owner))
-		
+
 		if layout==2 then
-			--[patched] vertical: anchor follows position. Minimap/XL use the same phud anchor as horizontal; Standard uses VERT_X/VERT_Y. Stacks down by VERT_GAP.
+			--vertical: Minimap/XL use the phud anchor (same start as horizontal); Standard uses VERT_X/VERT_Y. Stacks down by VERT_GAP.
 			local vx, vy = VERT_X, VERT_Y
 			if positional==0 or positional==1 then vx, vy = phud_xpos, phud_ypos end
 			self.badgearray[i]:SetPosition(vx, vy + VERT_GAP*(i-1), 0)
@@ -55,71 +48,55 @@ local function onstatusdisplaysconstruct(self)
 		end
 	end
 
-	self.owner.UpdateBadgeVisibility = function()
+	-- single authoritative refresh: bounded by badge count (no nil-index crash),
+	-- stable userid ordering (no badge<->player desync), name+HP+visibility in one pass,
+	-- trailing slots cleared (no stale departed-player names).
+	self.owner.UpdateBadges = function()
+		local maxbadges = #self.badgearray
 		if DEBUG_SHOWALL then
-			for i = 1, GLOBAL.TheNet:GetDefaultMaxPlayers(), 1 do
+			for i = 1, maxbadges do
 				self.badgearray[i]:SetName("Player"..i)
 				self.badgearray[i]:SetPercent(((i*17)%100)/100, 100, 0)
 				self.badgearray[i]:ShowBadge()
 			end
 			return
 		end
-		for i = 1, GLOBAL.TheNet:GetDefaultMaxPlayers(), 1 do
-			self.badgearray[i]:HideBadge()
-			--self.badgearray[i]:ShowBadge()
-
-		end
-		for i, v in ipairs(_G.AllPlayers) do
-			local isdead = (v.customisdead and v.customisdead:value() or false)
-
--- [patched] 			print("Player "..tostring(i).." Should be "..tostring(isdead).." bruh")
-			if isdead==true then 
-				self.badgearray[i]:ShowDead()
+		local players = {}
+		for _, v in ipairs(_G.AllPlayers) do players[#players+1] = v end
+		table.sort(players, function(a, b) return (a.userid or "") < (b.userid or "") end)
+		for i = 1, maxbadges do
+			local b = self.badgearray[i]
+			if b == nil then break end
+			local v = players[i]
+			if v == nil then
+				b:HideBadge()
 			else
-				self.badgearray[i]:ShowBadge()
+				local isdead = (v.customisdead ~= nil and v.customisdead:value()) or false
+				local percent = (v.customhpbadgepercent ~= nil and v.customhpbadgepercent:value()/100) or 0
+				local maxhp = (v.customhpbadgemax ~= nil and v.customhpbadgemax:value()) or 0
+				b:SetName(v:GetDisplayName())
+				b:SetPercent(percent, maxhp, 0)
+				if isdead then b:ShowDead() else b:ShowBadge() end
 			end
-
 		end
 	end
-
-
-	--call upon any player healthdelta
-	self.owner.UpdateBadges= function()
-		if DEBUG_SHOWALL then GLOBAL.ThePlayer.UpdateBadgeVisibility() return end
-		--update badges
-		for i, v in ipairs(_G.AllPlayers) do
-			local percent = v.customhpbadgepercent and (v.customhpbadgepercent:value())/100 or 0
-			local max = v.customhpbadgemax and v.customhpbadgemax:value() or 0
-			local debuff = v.customhpbadgedebuff and v.customhpbadgedebuff:value() or 0
-			self.badgearray[i]:SetPercent(percent,max,0)
-			self.badgearray[i]:SetName(v:GetDisplayName())
-		end
-		GLOBAL.ThePlayer.UpdateBadgeVisibility()
-	end
-
+	-- visibility is folded into UpdateBadges; keep the old name as an alias for safety
+	self.owner.UpdateBadgeVisibility = self.owner.UpdateBadges
 
 end
 
 -- Apply function on construction of class statusdisplays
 AddClassPostConstruct("widgets/statusdisplays", onstatusdisplaysconstruct)
 
---server functions
+--server functions: drive the netvars from real health/death events
 local function onhealthdelta(inst, data)
-	--get health of char
 	local setpercent = data.newpercent and data.newpercent or 0
-	inst.customhpbadgepercent:set(math.floor(setpercent * 100+0.5))--potatoey rounding to push shorts
-	--get max health of char
+	inst.customhpbadgepercent:set(math.floor(setpercent * 100+0.5))
 	inst.customhpbadgemax:set(inst.components.health:GetMaxWithPenalty())
-	--get debuff of char health
 	inst.customhpbadgedebuff:set(inst.components.health:GetPenaltyPercent())
-	-- forcible is dead check
-	if(inst:HasTag('playerghost')) then
-	inst.customisdead:set(true)
+	if inst:HasTag('playerghost') then
+		inst.customisdead:set(true)
 	end
-end
-
-local function ondisconnect(inst,data)
-	if inst and inst.customexitdelta then inst.customexitdelta:set(true) end
 end
 
 local function ondeath(inst,data)
@@ -130,64 +107,51 @@ local function onrespawn(inst,data)
 	inst.customisdead:set(false)
 end
 
---network functions
+-- client refresh, guarded against nil ThePlayer / not-yet-attached UpdateBadges
+-- (ThePlayer/HUD may not exist yet during early join or your own shard migration)
+local function refresh_local_hud()
+	if _G.ThePlayer ~= nil and _G.ThePlayer.UpdateBadges ~= nil then
+		_G.ThePlayer.UpdateBadges()
+	end
+end
 
-
--- When somebody's health changes, it triggers the badges health update
 local function oncustomhpbadgedirty(inst)
-	GLOBAL.ThePlayer.UpdateBadges()
+	refresh_local_hud()
 end
 
---when someone dies or revives, it triggers badge visibility toggle
 local function ondeathdeltadirty(inst)
-	GLOBAL.ThePlayer.UpdateBadgeVisibility()
-end
---when someone leaves the server, it triggers badge visibility toggle
-local function ondiconnectdirty( inst )
-	GLOBAL.ThePlayer.UpdateBadgeVisibility()
+	refresh_local_hud()
 end
 
 local function customhppostinit(inst)
-	-- Net variable that stores between 0-255; more info in netvars.lua
-	-- GUID of entity, unique identifier of variable, event pushed when variable changes
-	-- Event is pushed to the entity it refers to, server and client side wise
-
+	-- per-entity netvars (byte 0-255 / bool); 3rd arg is the dirty-event name
 	inst.customhpbadgepercent = GLOBAL.net_byte(inst.GUID, "customhpbadge.percent", "customhpbadgedirty")
 	inst.customhpbadgemax = GLOBAL.net_byte(inst.GUID,"customhpbadge.max","customhpbadgedirty")
 	inst.customhpbadgedebuff = GLOBAL.net_byte(inst.GUID,"customhpbadge.debuff","customhpbadgedirty")
-	inst.customisdead=GLOBAL.net_bool(inst.GUID,"customhpbadge.isdead","ondeathdeltadirty")
-	inst.customexitdelta=GLOBAL.net_bool(inst.GUID,"customhpbadge.dctoggle","ondiconnectdirty")
+	inst.customisdead = GLOBAL.net_bool(inst.GUID,"customhpbadge.isdead","ondeathdeltadirty")
 
-
-	-- Server (master simulation) reacts to health and changes the net variable
+	-- Server (master sim) reacts to health/death and updates the netvars
 	if GLOBAL.TheWorld.ismastersim then
 		inst:ListenForEvent("healthdelta", onhealthdelta)
 		inst:ListenForEvent("respawnfromghost", onrespawn)
 		inst:ListenForEvent("death", ondeath)
-		inst:ListenForEvent("playerexited",ondisconnect, GLOBAL.TheWorld)
 
+		-- seed dead/ghost state for players (re)spawning here, incl. ghosts arriving via shard migration
+		if inst:HasTag("playerghost") or (inst.components.health ~= nil and inst.components.health:IsDead()) then
+			inst.customisdead:set(true)
+		end
 		inst.components.health:DoDelta(0)
-
 	end
 
-	-- Dedicated server is dummy player, only players hosting or clients have the badges
-	-- Only them react to the event pushed when the net variable changes
+	-- Clients react to netvar changes + refresh on any player removal (leave / migration teardown)
 	if not GLOBAL.TheNet:IsDedicated() then
 		inst:ListenForEvent("customhpbadgedirty", oncustomhpbadgedirty)
 		inst:ListenForEvent("ondeathdeltadirty", ondeathdeltadirty)
-		inst:ListenForEvent("ondiconnectdirty",ondiconnectdirty)
-		-- [v2026.4] The original disconnect path (customexitdelta netvar) never fired,
-		-- so a departed player's badge stayed stale. Refresh on player-entity removal:
 		inst:ListenForEvent("onremove", function()
 			if GLOBAL.TheWorld ~= nil then
-				GLOBAL.TheWorld:DoTaskInTime(0.1, function()
-					if GLOBAL.ThePlayer ~= nil and GLOBAL.ThePlayer.UpdateBadges ~= nil then
-						GLOBAL.ThePlayer.UpdateBadges()
-					end
-				end)
+				GLOBAL.TheWorld:DoTaskInTime(0.1, refresh_local_hud)
 			end
 		end)
 	end
 end
--- Apply function on player entity post initialization
 AddPlayerPostInit(customhppostinit)
