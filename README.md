@@ -3,7 +3,7 @@
 A modernized fork of [PartyHUD](https://github.com/brianchenito/PartyHud) by **brianchenito** — shows every player's health right on your HUD, updated to work on current *Don't Starve Together*.
 
 - **Source:** https://github.com/iblislin/DST-PartyHud
-- **Steam Workshop:** _(add link after publishing)_
+- **Steam Workshop:** https://steamcommunity.com/sharedfiles/filedetails/?id=3744675705
 
 ![PartyHud 2026 — vertical layout preview](preview.jpg)
 
