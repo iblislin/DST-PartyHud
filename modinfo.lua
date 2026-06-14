@@ -1,7 +1,7 @@
 name="PartyHud 2026"
 description= "A DST mod that displays the health status of other players. Set Position and layout in config."
 author="iblislin (DST 2026 port); original PartyHUD by brianchenito"
-version="2026.2"
+version="2026.3"
 forumthread=""
 
 api_version = 10-- the current version of the modding api

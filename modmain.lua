@@ -119,7 +119,7 @@ local function onhealthdelta(inst, data)
 end
 
 local function ondisconnect(inst,data)
-	inst.customexitdelta:set(true)
+	if inst and inst.customexitdelta then inst.customexitdelta:set(true) end
 end
 
 local function ondeath(inst,data)
