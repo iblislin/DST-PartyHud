@@ -15,8 +15,8 @@ local VERT_GAP = -90   -- gap between badges (negative = each next one goes DOWN
 
 --imports partybadge
 local phud_custombadge= _G.require "widgets/partybadge"
-local phud_xpos=0
-local phud_ypos=0
+local phud_xpos
+local phud_ypos
 
 if positional==0 then -- standard with minimap
 	phud_xpos= (-100)
