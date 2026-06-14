@@ -5,7 +5,7 @@ A modernized fork of [PartyHUD](https://github.com/brianchenito/PartyHud) by **b
 - **Source:** https://github.com/iblislin/DST-PartyHud
 - **Steam Workshop:** _(add link after publishing)_
 
-![PartyHud 2026 — vertical layout preview](preview.png)
+![PartyHud 2026 — vertical layout preview](preview.jpg)
 
 ## What's new in 2026
 - Works on current DST (the original was last updated in 2016)
