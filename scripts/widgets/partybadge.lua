@@ -1,87 +1,63 @@
+-- [PATCHED for DST 736959] ported to modern circular Badge widget.
+-- Original (brianchenito/PartyHud v0.985, 2016) used Badge._ctor(self,"health",owner)
+-- which loaded a now-renamed build ("health" -> "status_health") => invisible heart.
 local Badge = require "widgets/badge"
-local UIAnim = require "widgets/uianim"
-local Text = require "widgets/text"
+local Text  = require "widgets/text"
 local Image = require "widgets/image"
 
-local function OnEffigyDeactivated(inst)
-    if inst.AnimState:IsCurrentAnimation("deactivate") then
-        inst.widget:Hide()
-    end
-end
+local HEALTHBADGE_TINT = { 174/255, 21/255, 21/255, 1 }
 
 local PartyBadge = Class(Badge, function(self, owner)
-    Badge._ctor(self, "health", owner)
+    -- modern health badge: anim=nil -> status_meter path; iconbuild "status_health"
+    -- overrides the heart icon onto the frame; red tint; dont_update_while_paused=true
+    Badge._ctor(self, nil, owner, HEALTHBADGE_TINT, "status_health", nil, nil, true)
 
-    -- instance the health debuff coverup
-    self.topperanim = self.underNumber:AddChild(UIAnim())
-    self.topperanim:GetAnimState():SetBank("effigy_topper")
-    self.topperanim:GetAnimState():SetBuild("effigy_topper")
-    self.topperanim:GetAnimState():PlayAnimation("anim")
-    self.topperanim:SetClickable(false)
-
-    -- instance hp up/down arrow
-    self.sanityarrow = self.underNumber:AddChild(UIAnim())
-    self.sanityarrow:GetAnimState():SetBank("sanity_arrow")
-    self.sanityarrow:GetAnimState():SetBuild("sanity_arrow")
-    self.sanityarrow:GetAnimState():PlayAnimation("neutral")
-    self.sanityarrow:SetClickable(false)
-
-    --Hide the original frame since it is now overlapped by the topperanim
-    self.anim:GetAnimState():Hide("frame")
-
-    self.dead = self:AddChild(Image("images/hud.xml", "tab_arcane.tex"))
-    self.dead:SetPosition(-10, 0, 0)	
-    self.dead:SetScale(0.7)
-
+    -- player name label above the badge
     self.name = self:AddChild(Text(BODYTEXTFONT, 20))
     self.name:SetHAlign(ANCHOR_MIDDLE)
     self.name:SetPosition(0, 40, 0)
     self.name:SetString("--")
 
+    -- dead indicator
+    self.dead = self:AddChild(Image("images/hud.xml", "tab_arcane.tex"))
+    self.dead:SetPosition(-10, 0, 0)
+    self.dead:SetScale(0.7)
+    self.dead:Hide()
 
+    -- party badges always show the HP number (status badges hide it until hover)
+    if self.num ~= nil then self.num:Show() end
 end)
 
 function PartyBadge:SetName(namestring)
     self.name:SetString(namestring)
 end
--- updates hud, val= current hp percent(undebuffed), max = max hp, penalty =current hp penalty percent
+
+-- val = current hp fraction (0..1), max = max hp
 function PartyBadge:SetPercent(val, max, penaltypercent)
-    
     Badge.SetPercent(self, val, max)
-    penaltypercent = penaltypercent or 0
-    self.topperanim:GetAnimState():SetPercent("anim", penaltypercent)
+    if self.num ~= nil then self.num:Show() end
 end
 
--- hide entire badge
 function PartyBadge:HideBadge()
-	self.anim:Hide()
-	self.sanityarrow:Hide()
-	self.topperanim:Hide()
-    self.name:Hide()
-    self.dead:Hide()
     self:Hide()
 end
 
---show entire badge
 function PartyBadge:ShowBadge()
     self:Show()
-	self.anim:Show()
-	self.sanityarrow:Show()
-	self.topperanim:Show()
+    if self.anim ~= nil then self.anim:Show() end
+    if self.circleframe ~= nil then self.circleframe:Show() end
+    if self.num ~= nil then self.num:Show() end
     self.name:Show()
-	self.anim:GetAnimState():Hide("frame")
     self.dead:Hide()
 end
 
 function PartyBadge:ShowDead()
     self:Show()
-    self.anim:Hide()
-    self.sanityarrow:Hide()
-    self.topperanim:Hide()
+    if self.anim ~= nil then self.anim:Hide() end
+    if self.circleframe ~= nil then self.circleframe:Hide() end
+    if self.num ~= nil then self.num:Hide() end
     self.name:Show()
     self.dead:Show()
 end
-
-
 
 return PartyBadge

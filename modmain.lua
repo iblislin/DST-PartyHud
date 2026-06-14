@@ -1,3 +1,4 @@
+-- [PATCHED for DST 736959] fix1: dctoggle->customexitdelta (crash on playerexit); fix2: removed debug print. See PartyHUD orig brianchenito/PartyHud v0.985.
 _G = GLOBAL
 --_G.CHEATS_ENABLED = true--disable for push to live
 --_G.require( 'debugkeys' )--disable for push to live
@@ -11,6 +12,11 @@ _G = GLOBAL
 -- pulls setting for hud configs from modinfo
 local layout=GetModConfigData("layout")
 local positional=GetModConfigData("position")
+local DEBUG_SHOWALL = false -- [TEST ONLY] fill all badge slots so layout is visible solo
+-- [vertical layout tunables] edit these then restart client; only used when layout=Vertical
+local VERT_X   = 0  -- horizontal pos (more negative = further left)
+local VERT_Y   = -130  -- y of the FIRST (top) badge; lower number = lower on screen
+local VERT_GAP = -90   -- gap between badges (negative = each next one goes DOWN, under the previous)
 
 --imports partybadge
 local phud_custombadge= _G.require "widgets/partybadge"
@@ -38,19 +44,26 @@ local function onstatusdisplaysconstruct(self)
 	for i = 1, GLOBAL.TheNet:GetDefaultMaxPlayers(), 1 do
 		self.badgearray[i]=self:AddChild(phud_custombadge(self,self.owner))
 		
-		if layout==0 then
-			--complicated spagetti for a  properly aligned 2x3 grid
-			self.badgearray[i]:SetPosition(phud_xpos+(35*(-i-i%2)) ,phud_ypos-110+(110*(-i%2)),0)
-
+		if layout==2 then
+			--[patched] vertical: anchor follows position. Minimap/XL use the same phud anchor as horizontal; Standard uses VERT_X/VERT_Y. Stacks down by VERT_GAP.
+			local vx, vy = VERT_X, VERT_Y
+			if positional==0 or positional==1 then vx, vy = phud_xpos, phud_ypos end
+			self.badgearray[i]:SetPosition(vx, vy + VERT_GAP*(i-1), 0)
 		else
-			--top centered
+			--horizontal row
 			self.badgearray[i]:SetPosition(phud_xpos+(-70*i),phud_ypos,0)
-
-
 		end
 	end
 
 	self.owner.UpdateBadgeVisibility = function()
+		if DEBUG_SHOWALL then
+			for i = 1, GLOBAL.TheNet:GetDefaultMaxPlayers(), 1 do
+				self.badgearray[i]:SetName("Player"..i)
+				self.badgearray[i]:SetPercent(((i*17)%100)/100, 100, 0)
+				self.badgearray[i]:ShowBadge()
+			end
+			return
+		end
 		for i = 1, GLOBAL.TheNet:GetDefaultMaxPlayers(), 1 do
 			self.badgearray[i]:HideBadge()
 			--self.badgearray[i]:ShowBadge()
@@ -59,7 +72,7 @@ local function onstatusdisplaysconstruct(self)
 		for i, v in ipairs(_G.AllPlayers) do
 			local isdead = (v.customisdead and v.customisdead:value() or false)
 
-			print("Player "..tostring(i).." Should be "..tostring(isdead).." bruh")
+-- [patched] 			print("Player "..tostring(i).." Should be "..tostring(isdead).." bruh")
 			if isdead==true then 
 				self.badgearray[i]:ShowDead()
 			else
@@ -72,6 +85,7 @@ local function onstatusdisplaysconstruct(self)
 
 	--call upon any player healthdelta
 	self.owner.UpdateBadges= function()
+		if DEBUG_SHOWALL then GLOBAL.ThePlayer.UpdateBadgeVisibility() return end
 		--update badges
 		for i, v in ipairs(_G.AllPlayers) do
 			local percent = v.customhpbadgepercent and (v.customhpbadgepercent:value())/100 or 0
@@ -105,7 +119,7 @@ local function onhealthdelta(inst, data)
 end
 
 local function ondisconnect(inst,data)
-	inst.dctoggle:set(true)
+	inst.customexitdelta:set(true)
 end
 
 local function ondeath(inst,data)

@@ -1,7 +1,7 @@
-name="PartyHUD"
+name="PartyHud 2026"
 description= "A DST mod that displays the health status of other players. Set Position and layout in config."
-author= "Brian Chen (Chenito)"
-version="0.985"
+author="iblislin (DST 2026 port); original PartyHUD by brianchenito"
+version="2026.0"
 forumthread=""
 
 api_version = 10-- the current version of the modding api
@@ -27,10 +27,11 @@ configuration_options=
 	label="HUD Layout",
 	hover="Choose the Layout of the health indicators",
 	options={
-			{description = "Compact Grid", data = 0},
-			{description = "Horizontal", data = 1}
+			{description = "Horizontal", data = 1},
+			{description = "Vertical", data = 2}
 		},
-	default=1,
+	default=2,
+	client = true,
 	},
 		{
 	name="position",
@@ -42,5 +43,6 @@ configuration_options=
 			{description = "Standard", data = 2}
 		},
 	default=0,
+	client = true,
 	},
 }
