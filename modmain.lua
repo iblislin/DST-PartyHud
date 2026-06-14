@@ -176,6 +176,17 @@ local function customhppostinit(inst)
 		inst:ListenForEvent("customhpbadgedirty", oncustomhpbadgedirty)
 		inst:ListenForEvent("ondeathdeltadirty", ondeathdeltadirty)
 		inst:ListenForEvent("ondiconnectdirty",ondiconnectdirty)
+		-- [v2026.4] The original disconnect path (customexitdelta netvar) never fired,
+		-- so a departed player's badge stayed stale. Refresh on player-entity removal:
+		inst:ListenForEvent("onremove", function()
+			if GLOBAL.TheWorld ~= nil then
+				GLOBAL.TheWorld:DoTaskInTime(0.1, function()
+					if GLOBAL.ThePlayer ~= nil and GLOBAL.ThePlayer.UpdateBadges ~= nil then
+						GLOBAL.ThePlayer.UpdateBadges()
+					end
+				end)
+			end
+		end)
 	end
 end
 -- Apply function on player entity post initialization
