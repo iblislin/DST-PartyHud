@@ -1,4 +1,4 @@
--- [PartyHud 2026 v2026.6] modernized fork of brianchenito/PartyHud v0.985.
+-- [PartyHud 2026 v2026.7] modernized fork of brianchenito/PartyHud v0.985.
 -- v2026.6 richer status: broadcasts each teammate's current HP/hunger/sanity (net_ushortint,
 -- the exact integer the game's own meters display = ceil(GetPercent()*max)) plus their max, and
 -- on-fire/overheating/freezing (net_bool), via the same server-hook + custom-GUID-netvar pattern.
