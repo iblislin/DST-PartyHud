@@ -131,9 +131,12 @@ self.topperanim:GetAnimState():SetPercent("anim", 1)        -- 1 => no blackout
 Badge.SetPercent(self, val, max)
 self.topperanim:GetAnimState():SetPercent("anim", 1 - penaltypercent)
 ```
-`statusdisplays.lua` drives it with `self.brain:SetPercent(pct, sanity:Max(), GetPenaltyPercent())`
-and the heart equivalent — i.e. **ring fill is relative to the FULL max**, penalty passed
-separately (0..1).
+`statusdisplays.lua` drives it with `self.brain:SetPercent(pct, sanity:Max(),
+GetPenaltyPercent())` (`SetSanityPercent`, ~`statusdisplays.lua:864`) and the heart equivalent
+`self.heart:SetPercent(pct, health:Max(), penalty)` (`SetHealthPercent`, ~`:632`) — i.e. **ring
+fill is relative to the FULL max** (`health:Max()` / `sanity:Max()`, not the penalized max),
+penalty passed separately (0..1). Cross-check the mod's broadcast: it should send current
+against the FULL max so a penalized player isn't drawn as 100% full.
 
 Penalty 0 → `SetPercent("anim", 1)` → no black; 0.5 → `0.5` → top half black; 1 → `0` → fully
 black. The **vertical flip is what makes `1 - penalty` black the TOP**; without it you'd black

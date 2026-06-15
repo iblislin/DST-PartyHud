@@ -53,6 +53,13 @@ verified file\:line anchors and code snippets for each item below.
 Run every item against each custom widget element you added or changed. Create a TodoWrite item
 per check that's relevant to your change.
 
+**Composed / nested badges:** a widget often nests one or more vanilla-style `Badge`s as
+*children* (e.g. a main HP ring with scaled-down hunger/sanity sub-rings), and re-implements a
+sub-ring's own topper / rate arrow on that child. When it does, run items **3, 5, 6, and 10
+against the *sub-badge's* own `underNumber` and its own show/hide path**, not just the top-level
+badge — the sub-ring's overlays ride the sub-ring's z-stack, scale, and visibility, so each
+nested badge needs its own pass.
+
 1. **Build / bank name** — does the `SetBank`/`SetBuild` string match the *current* vanilla
    asset? Asset builds get **renamed** between game versions; a stale name loads with no error
    and renders **nothing**. (The 2016 heart build `"health"` → modern `"status_health"`: a
@@ -107,7 +114,9 @@ per check that's relevant to your change.
 10. **Multi-state coexistence** — check the states that stack: penalty **and** on-fire/cold at
     once (does the arrow still show above the blackout?), dead/ghost (are arrows + toppers
     hidden?), sub-gauges toggled off (do child overlays hide with the ring?), hover vs non-hover
-    (number visibility). A fix that's correct in isolation can break when two states overlap.
+    (number visibility), and **empty / full gauge** (rate arrows should settle to neutral at full
+    — no-increase-at-full — and at empty — no-decrease-at-empty — mirroring the vanilla badge
+    OnUpdate guards). A fix that's correct in isolation can break when two states overlap.
 
 ## Red flags (stop and re-check vanilla)
 
