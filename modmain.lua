@@ -29,10 +29,11 @@
 --   5. Netvar ranges: current HP/hunger/sanity + their max use net_ushortint (0..65535; WX-78's
 --      400 HP fits, never negative); sanity rate is RATE_SCALE 0..6 in net_tinybyte (0..7). Never
 --      feed a wider/negative value into these.
---   6. Client refresh paths (refresh_local_hud, the onremove task, the DoTaskInTime relayout, the
+--   6. Client refresh paths (refresh_local_hud, the playerentered/playerexited presence listeners, the DoTaskInTime relayout, the
 --      refreshhudsize listener) are nil-guarded against a mid-migration nil ThePlayer / torn-down
---      HUD. The refreshhudsize listener is attached to HUD.inst and shares the HUD lifecycle (the
---      HUD + its widget tree are rebuilt as one unit on migration), so it does not leak.
+--      HUD. The refreshhudsize + playerentered/playerexited listeners are registered on the
+--      statusdisplays widget's own self.inst (with TheWorld / HUD.inst as the event source), so
+--      Widget:Kill on HUD rebuild tears them down -- no stale closure on a killed badgearray.
 -- ============================================================================================
 _G = GLOBAL
 
@@ -157,12 +158,32 @@ local function onstatusdisplaysconstruct(self)
 	if self.owner ~= nil and self.owner.DoTaskInTime ~= nil then
 		self.owner:DoTaskInTime(0, function()
 			layout_badges(self.badgearray)
-			if self.owner.HUD ~= nil and self.owner.HUD.inst ~= nil then
-				self.owner.HUD.inst:ListenForEvent("refreshhudsize", function()
+			if self.inst ~= nil and self.owner.HUD ~= nil and self.owner.HUD.inst ~= nil then
+				-- register on self.inst (the widget) with HUD.inst as the source, so this listener
+				-- is torn down with the widget on HUD rebuild (no stale closure on a killed badgearray).
+				self.inst:ListenForEvent("refreshhudsize", function()
 					layout_badges(self.badgearray)
-				end)
+				end, self.owner.HUD.inst)
 			end
 		end)
+	end
+
+	-- Presence refresh: re-run UpdateBadges whenever a player enters/leaves local network view
+	-- (join, disconnect, or shard migration). playerentered/playerexited fire on TheWorld for BOTH
+	-- server and client (ms_playerjoined/ms_playerleft are server-only). Registered on self.inst
+	-- (the widget) so they're cleaned up when the HUD is rebuilt, e.g. on your own migration.
+	if self.inst ~= nil and GLOBAL.TheWorld ~= nil then
+		local function on_presence_changed()
+			if GLOBAL.TheWorld ~= nil then
+				GLOBAL.TheWorld:DoTaskInTime(0.1, function()
+					if self.owner ~= nil and self.owner.UpdateBadges ~= nil then
+						self.owner.UpdateBadges()
+					end
+				end)
+			end
+		end
+		self.inst:ListenForEvent("playerentered", on_presence_changed, GLOBAL.TheWorld)
+		self.inst:ListenForEvent("playerexited", on_presence_changed, GLOBAL.TheWorld)
 	end
 
 	-- single authoritative refresh: bounded by badge count (no nil-index crash),
@@ -181,7 +202,11 @@ local function onstatusdisplaysconstruct(self)
 		-- for a stable order that doesn't shuffle as AllPlayers reindexes on join/leave.
 		local me = _G.ThePlayer
 		table.sort(players, function(a, b)
-			if a == me then return true end
+			-- irreflexive guard: never report an element < itself. Without it, when ThePlayer is
+			-- in the list (show_self) and lands on the sort pivot, comp(me,me)=true breaks Lua 5.1
+			-- table.sort's sentinel -> "invalid order function for sorting" error.
+			if a == b then return false end
+			if a == me then return true end -- your own badge sorts to slot 1
 			if b == me then return false end
 			return (a.userid or "") < (b.userid or "")
 		end)
@@ -241,11 +266,14 @@ local function onhealthdelta(inst, data)
 	end
 end
 
-local function ondeath(inst,data)
+-- v2026.7: ghost state from the authoritative lifecycle events (ms_becameghost /
+-- ms_respawnedfromghost, pushed on the player) instead of the intent events death/
+-- respawnfromghost -- death can fire without the player actually becoming a ghost.
+local function onbecameghost(inst,data)
 	inst.customisdead:set(true)
 end
 
-local function onrespawn(inst,data)
+local function onrespawnedfromghost(inst,data)
 	inst.customisdead:set(false)
 end
 
@@ -339,8 +367,8 @@ local function customhppostinit(inst)
 	-- Server (master sim) reacts to health/death and updates the netvars
 	if GLOBAL.TheWorld.ismastersim then
 		inst:ListenForEvent("healthdelta", onhealthdelta)
-		inst:ListenForEvent("respawnfromghost", onrespawn)
-		inst:ListenForEvent("death", ondeath)
+		inst:ListenForEvent("ms_respawnedfromghost", onrespawnedfromghost)
+		inst:ListenForEvent("ms_becameghost", onbecameghost)
 		inst:ListenForEvent("hungerdelta", onhungerdelta)
 		inst:ListenForEvent("sanitydelta", onsanitydelta)
 		inst:ListenForEvent("startfiredamage", onstartfire)
@@ -375,15 +403,12 @@ local function customhppostinit(inst)
 		end
 	end
 
-	-- Clients react to netvar changes + refresh on any player removal (leave / migration teardown)
+	-- Clients react to this player's own netvar changes. Presence (join / disconnect / shard
+	-- migration) is handled centrally by playerentered/playerexited on TheWorld in
+	-- onstatusdisplaysconstruct, so no per-entity onremove refresh is needed here.
 	if not GLOBAL.TheNet:IsDedicated() then
 		inst:ListenForEvent("customhpbadgedirty", oncustomhpbadgedirty)
 		inst:ListenForEvent("ondeathdeltadirty", ondeathdeltadirty)
-		inst:ListenForEvent("onremove", function()
-			if GLOBAL.TheWorld ~= nil then
-				GLOBAL.TheWorld:DoTaskInTime(0.1, refresh_local_hud)
-			end
-		end)
 	end
 end
 AddPlayerPostInit(customhppostinit)
