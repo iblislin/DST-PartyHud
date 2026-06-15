@@ -23,6 +23,12 @@ A modernized fork of [PartyHUD](https://github.com/brianchenito/PartyHud) by **b
 - Vertical layout **auto-wraps into columns** sized to your screen height, re-flows when you resize the window, and keeps clear of the map (M) button
 - Two new per-player options: **Show Your Own Badge** and **Hunger/Sanity Sub-gauges** (hide them for a compact HP-only badge)
 
+### New in 2026.7 — penalty & damage cues
+- Max-HP and max-sanity **penalty** (from endless-mode resurrection) now shows as a darkened "lost max" arc on the ring, just like the game's own badges
+- The HP ring shows a **down-arrow** when a teammate is losing health to fire / overheating / freezing, alongside the colour pulse
+- The **sanity arrow now rises while a teammate is sleeping** (matching the game)
+- More robust ghost / dead state and join / leave / cave-migration handling
+
 ## Install (server mod)
 Subscribe on the Workshop, **or** place this folder into your server's `mods/` as `partyhud` and enable it in each shard's `modoverrides.lua`:
 ```lua
@@ -73,6 +79,16 @@ to work on current Don't Starve Together builds.
 [*] New options: Show Your Own Badge, and Hunger/Sanity Sub-gauges (hide for a compact badge)
 [/list]
 
+[b]New in 2026.7 — penalty & damage cues[/b]
+[list]
+[*] Max-HP / max-sanity penalty (from endless-mode resurrection) shown as a darkened "lost max"
+    arc on the ring, like the game's own badges
+[*] The HP ring shows a down-arrow when a teammate is losing HP to fire / overheating / freezing,
+    alongside the colour pulse
+[*] The sanity arrow now rises while a teammate is sleeping
+[*] More robust ghost / dead state and join / leave / cave-migration handling
+[/list]
+
 [b]Settings (each player picks their own)[/b]
 [list]
 [*] HUD Layout: Horizontal / Vertical
@@ -117,6 +133,14 @@ Thanks for the original work!
 [*] 理智速率箭頭(上升/下降),與遊戲原生條一致
 [*] 垂直排列依螢幕高度自動換欄、視窗縮放會重排,並避開地圖(M)按鈕
 [*] 新選項:顯示自己的徽章、飢餓/理智子環(可隱藏為精簡的純 HP 徽章)
+[/list]
+
+[b]2026.7 新增 —— 上限懲罰與受傷提示[/b]
+[list]
+[*] 主環顯示最大 HP / 理智的「上限懲罰」(無盡模式復活造成),以變暗的弧形呈現,與遊戲原生徽章一致
+[*] 隊友因著火 / 過熱 / 失溫而掉血時,HP 環會顯示向下箭頭,與顏色脈動同時出現
+[*] 隊友睡覺時,理智箭頭會正確顯示為上升
+[*] 強化幽靈/死亡狀態,以及加入 / 離開 / 進洞穴遷移的處理
 [/list]
 
 [b]設定(每位玩家各自選擇)[/b]

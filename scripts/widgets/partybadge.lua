@@ -55,9 +55,22 @@ local PartyBadge = Class(Badge, function(self, owner)
     self.sanitybadge:SetScale(SUB_SCALE)
     self.sanitybadge:SetPosition(SUB_X, SUB_Y, 0)
 
+    -- max-sanity penalty blackout overlay on the sanity sub-ring (same mechanism as the HP ring).
+    self.sanitytopper = self.sanitybadge.underNumber:AddChild(UIAnim())
+    self.sanitytopper:GetAnimState():SetBank("status_meter")
+    self.sanitytopper:GetAnimState():SetBuild("status_meter")
+    self.sanitytopper:GetAnimState():PlayAnimation("anim")
+    self.sanitytopper:GetAnimState():SetMultColour(0, 0, 0, 1)
+    self.sanitytopper:SetScale(1, -1, 1)
+    self.sanitytopper:SetClickable(false)
+    self.sanitytopper:GetAnimState():AnimateWhilePaused(false)
+    self.sanitytopper:GetAnimState():SetPercent("anim", 1)
+
     -- v2026.6 sanity rate arrow (mirrors the game's sanity gauge up/down indicator)
-    -- centered on the sanity sub-ring (child of it), mirroring the game's sanity gauge arrow
-    self.sanityarrow = self.sanitybadge:AddChild(UIAnim())
+    -- centered on the sanity sub-ring. Parented to the sub-ring's underNumber (NOT the badge
+    -- directly) so it draws UNDER the sanity number -- the number stays readable on hover, exactly
+    -- like the vanilla badges (healthbadge.lua:41 / sanitybadge.lua:37 add their arrow to underNumber).
+    self.sanityarrow = self.sanitybadge.underNumber:AddChild(UIAnim())
     self.sanityarrow:GetAnimState():SetBank("sanity_arrow")
     self.sanityarrow:GetAnimState():SetBuild("sanity_arrow")
     self.sanityarrow:GetAnimState():PlayAnimation("neutral")
@@ -66,6 +79,39 @@ local PartyBadge = Class(Badge, function(self, owner)
     self.sanityarrow:SetPosition(0, 0, 0)
     self.sanityarrow:Hide()
     self.sanityarrow_cur = nil
+
+    -- max-HP penalty "blackout" overlay (mirrors vanilla healthbadge.topperanim): a black,
+    -- vertically-flipped status_meter that darkens the lost-max region from the TOP. Driven in
+    -- SetPercent. SetScale(1,-1,1) does the flip; SetPercent("anim",1) = no penalty initially.
+    -- Created BEFORE hparrow so the arrow draws on top of the blackout (vanilla draw order:
+    -- fill < topper < arrow < number).
+    self.hptopper = self.underNumber:AddChild(UIAnim())
+    self.hptopper:GetAnimState():SetBank("status_meter")
+    self.hptopper:GetAnimState():SetBuild("status_meter")
+    self.hptopper:GetAnimState():PlayAnimation("anim")
+    self.hptopper:GetAnimState():SetMultColour(0, 0, 0, 1)
+    self.hptopper:SetScale(1, -1, 1)
+    self.hptopper:SetClickable(false)
+    self.hptopper:GetAnimState():AnimateWhilePaused(false)
+    self.hptopper:GetAnimState():SetPercent("anim", 1)
+
+    -- v2026.7 HP rate arrow on the main ring: a down-arrow when losing HP to fire/overheat/
+    -- freeze, shown together with the colour pulse (mirrors the game's heart badge arrow for
+    -- those states). Independent of the sub-gauges toggle (this is HP, not a sub-gauge).
+    -- Parented to underNumber so it draws UNDER the HP number (readable on hover), matching vanilla.
+    self.hparrow = self.underNumber:AddChild(UIAnim())
+    self.hparrow:GetAnimState():SetBank("sanity_arrow")
+    self.hparrow:GetAnimState():SetBuild("sanity_arrow")
+    self.hparrow:GetAnimState():PlayAnimation("neutral")
+    self.hparrow:GetAnimState():AnimateWhilePaused(false)
+    self.hparrow:SetClickable(false)
+    -- scale 1.0 (full ring scale) to match the vanilla health badge's rate arrow, which is added
+    -- at default scale (healthbadge.lua:41 -- no SetScale). 0.7 rendered visibly smaller than the
+    -- game's arrow; align with the game UI.
+    self.hparrow:SetScale(1)
+    self.hparrow:SetPosition(0, 0, 0)
+    self.hparrow:Hide()
+    self.hparrow_cur = nil
 
     -- dead indicator
     self.dead = self:AddChild(Image("images/hud.xml", "tab_arcane.tex"))
@@ -109,10 +155,15 @@ function PartyBadge:SetName(namestring)
     self.name:SetString(namestring)
 end
 
--- cur = current HP (absolute), max = max HP
+-- cur = current HP (absolute), max = FULL max HP, penaltypercent = max-HP penalty (0..1).
+-- The ring fills cur/FULLmax, so a penalized player no longer looks 100% full. The max-HP
+-- penalty is drawn by the hptopper overlay (a black, vertically-flipped status_meter that
+-- blacks out the lost-max region from the TOP, mirroring the vanilla heart badge) rather than
+-- the base Badge bonusval/anim_bonus white-from-bottom arc.
 function PartyBadge:SetPercent(cur, max, penaltypercent)
     local m = (max ~= nil and max > 0) and max or 1
     Badge.SetPercent(self, cur / m, max)
+    self.hptopper:GetAnimState():SetPercent("anim", 1 - (penaltypercent or 0))
     if self.num ~= nil then
         self.num:SetString(tostring(math.floor((cur or 0) + 0.5)))
         if self.hp_number_always then self.num:Show() end
@@ -125,7 +176,7 @@ end
 -- and the game's own meters instead of a 0-100 percent.
 -- onfire/overheating/freezing are bools -> a colour-coded warning pulse on the main HP
 -- ring, by priority (mutually exclusive in practice). Sub-rings hide their number until hover.
-function PartyBadge:SetStatus(hunger_cur, hunger_max, sanity_cur, sanity_max, onfire, overheating, freezing)
+function PartyBadge:SetStatus(hunger_cur, hunger_max, sanity_cur, sanity_max, onfire, overheating, freezing, sanity_penalty)
     -- only update the sub-rings when enabled; the on-fire/overheat/freeze pulse on the main
     -- ring runs regardless (handled below). Sub-ring numbers stay hidden until hover.
     if self.subvisible then
@@ -133,6 +184,9 @@ function PartyBadge:SetStatus(hunger_cur, hunger_max, sanity_cur, sanity_max, on
         local sm = (sanity_max ~= nil and sanity_max > 0) and sanity_max or 1
         self.hungerbadge:SetPercent((hunger_cur or 0) / hm, hunger_max or 100)
         self.sanitybadge:SetPercent((sanity_cur or 0) / sm, sanity_max or 100)
+        -- sanity_penalty (0..1) drives the sanitytopper blackout overlay (black-from-top), the
+        -- same mechanism as the HP main ring, instead of the base Badge bonusval white arc.
+        self.sanitytopper:GetAnimState():SetPercent("anim", 1 - (sanity_penalty or 0))
         if self.hungerbadge.num ~= nil then self.hungerbadge.num:SetString(tostring(math.floor((hunger_cur or 0) + 0.5))) end
         if self.sanitybadge.num ~= nil then self.sanitybadge.num:SetString(tostring(math.floor((sanity_cur or 0) + 0.5))) end
     end
@@ -145,6 +199,20 @@ function PartyBadge:SetStatus(hunger_cur, hunger_max, sanity_cur, sanity_max, on
         self:StartWarning(unpack(tint)) -- StartWarning re-applies the colour each call
     else
         self:StopWarning()
+    end
+
+    -- HP rate arrow: a fast down-arrow whenever HP is draining from fire/overheat/freeze
+    -- (shown alongside the pulse). Hidden otherwise.
+    local hparrowanim = (onfire or overheating or freezing) and "arrow_loop_decrease_most" or nil
+    if hparrowanim == nil then
+        self.hparrow:Hide()
+        self.hparrow_cur = nil
+    else
+        if self.hparrow_cur ~= hparrowanim then
+            self.hparrow_cur = hparrowanim
+            self.hparrow:GetAnimState():PlayAnimation(hparrowanim, true)
+        end
+        self.hparrow:Show()
     end
 end
 
@@ -196,6 +264,8 @@ function PartyBadge:ShowDead()
     self.sanityarrow:Hide()
     self.sanityarrow_cur = nil
     self:StopWarning()
+    self.hparrow:Hide()
+    self.hparrow_cur = nil
     self.dead:Show()
 end
 

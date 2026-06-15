@@ -221,26 +221,28 @@ local function onstatusdisplaysconstruct(self)
 				local isdead = (v.customisdead ~= nil and v.customisdead:value()) or false
 				local hpcur = (v.customhpbadgepercent ~= nil and v.customhpbadgepercent:value()) or 0
 				local maxhp = (v.customhpbadgemax ~= nil and v.customhpbadgemax:value()) or 0
+				local hppenalty = (v.customhpbadgedebuff ~= nil and v.customhpbadgedebuff:value()/100) or 0
 				local hunger = (v.customhunger ~= nil and v.customhunger:value()) or 0
 				local hungermax = (v.customhungermax ~= nil and v.customhungermax:value()) or 100
 				local sanity = (v.customsanity ~= nil and v.customsanity:value()) or 0
 				local sanitymax = (v.customsanitymax ~= nil and v.customsanitymax:value()) or 100
+				local sanitypenalty = (v.customsanitydebuff ~= nil and v.customsanitydebuff:value()/100) or 0
 				local onfire = (v.customonfire ~= nil and v.customonfire:value()) or false
 				local overheating = (v.customoverheating ~= nil and v.customoverheating:value()) or false
 				local freezing = (v.customfreezing ~= nil and v.customfreezing:value()) or false
 				if hungermax <= 0 then hungermax = 100 end
 				if sanitymax <= 0 then sanitymax = 100 end
 				b:SetName(v:GetDisplayName())
-				b:SetPercent(hpcur, maxhp, 0)
-				b:SetStatus(hunger, hungermax, sanity, sanitymax, onfire, overheating, freezing)
+				b:SetPercent(hpcur, maxhp, hppenalty)
+				b:SetStatus(hunger, hungermax, sanity, sanitymax, onfire, overheating, freezing, sanitypenalty)
 				local sanityrate = (v.customsanityrate ~= nil and v.customsanityrate:value()) or 0
 				b:SetSanityRate(sanityrate)
 				if isdead then b:ShowDead() else b:ShowBadge() end
 			elseif DEBUG_SHOWALL and i <= visible_cap then
 				-- [TEST ONLY] empty seat -> mock placeholder so the full layout stays visible
 				b:SetName("Player"..i)
-				b:SetPercent((i*17)%150, 150, 0)
-				b:SetStatus((i*23)%150, 150, (i*41)%200, 200, (i%4)==0, (i%4)==1, (i%4)==2)
+				b:SetPercent((i*17)%150, 150, (i % 3 == 0) and 0.25 or 0)
+				b:SetStatus((i*23)%150, 150, (i*41)%200, 200, (i%4)==0, (i%4)==1, (i%4)==2, (i % 3 == 0) and 0.25 or 0)
 				b:SetSanityRate((i*5)%7)
 				b:ShowBadge()
 			else
@@ -258,11 +260,11 @@ AddClassPostConstruct("widgets/statusdisplays", onstatusdisplaysconstruct)
 
 --server functions: drive the netvars from real health/death events
 local function onhealthdelta(inst, data)
-	local setpercent = data.newpercent and data.newpercent or 0
-	local hpmax = inst.components.health:GetMaxWithPenalty()
-	inst.customhpbadgepercent:set(math.ceil(setpercent * hpmax))
-	inst.customhpbadgemax:set(math.floor(hpmax + 0.5))
-	inst.customhpbadgedebuff:set(inst.components.health:GetPenaltyPercent())
+	local setpercent = data.newpercent and data.newpercent or 0  -- GetPercent() = current / FULL max
+	local fullmax = inst.components.health.maxhealth              -- FULL max; the penalty is shown separately
+	inst.customhpbadgepercent:set(math.ceil(setpercent * fullmax))                  -- absolute current HP
+	inst.customhpbadgemax:set(math.floor(fullmax + 0.5))                            -- FULL max (ring is relative to this)
+	inst.customhpbadgedebuff:set(math.floor(inst.components.health:GetPenaltyPercent() * 100 + 0.5)) -- max-HP penalty, 0-100
 	if inst:HasTag('playerghost') then
 		inst.customisdead:set(true)
 	end
@@ -319,9 +321,11 @@ end
 local function onsanitydelta(inst, data)
 	local p = data and data.newpercent or 0
 	if inst.components.sanity ~= nil then
-		local smax = inst.components.sanity:GetMaxWithPenalty()
-		inst.customsanity:set(math.ceil(p * smax))
-		inst.customsanitymax:set(math.floor(smax + 0.5))
+		local sanity = inst.components.sanity
+		local smax = sanity.max                                            -- FULL max; penalty shown separately
+		inst.customsanity:set(math.ceil(p * smax))                         -- absolute current sanity
+		inst.customsanitymax:set(math.floor(smax + 0.5))                   -- FULL max (ring relative to this)
+		inst.customsanitydebuff:set(math.floor(sanity:GetPenaltyPercent() * 100 + 0.5)) -- max-sanity penalty 0-100
 		-- SANITY RATE ARROW (event-driven, no poll). ASSUMPTION: Sanity:DoDelta UNCONDITIONALLY
 		-- pushes "sanitydelta" on EVERY sanity update tick (sanity.lua:405, called from Recalc at
 		-- :609 each StartUpdatingComponent tick), carrying the freshly recomputed ratescale incl. the
@@ -380,9 +384,10 @@ local function customhppostinit(inst)
 	-- per-entity netvars (ushortint current/max, byte, bool); 3rd arg is the dirty-event name
 	inst.customhpbadgepercent = GLOBAL.net_ushortint(inst.GUID, "customhpbadge.percent", "customhpbadgedirty") -- holds current HP (absolute integer the game would display)
 	inst.customhpbadgemax = GLOBAL.net_ushortint(inst.GUID,"customhpbadge.max","customhpbadgedirty") -- ushort: max HP can exceed 255 (e.g. WX-78 400)
-	-- NOTE (audit 2026-06-15): currently DEAD -- set below but never read in UpdateBadges. Also
-	-- GetPenaltyPercent() is a 0..1 float, which truncates to 0 in a net_byte. Remove it, or store
-	-- math.floor(penalty*100) as an int, if you ever want to display the HP max-penalty.
+	-- max-HP penalty as a 0-100 int (set in onhealthdelta via math.floor(GetPenaltyPercent()*100+0.5),
+	-- read in UpdateBadges:224 and passed to PartyBadge:SetPercent -> drives the darkened penalty
+	-- topper on the HP ring). Stored as an int (NOT the raw 0..1 float, which would truncate to 0 in a
+	-- net_byte). Do NOT remove -- the penalty arc depends on it.
 	inst.customhpbadgedebuff = GLOBAL.net_byte(inst.GUID,"customhpbadge.debuff","customhpbadgedirty")
 	inst.customisdead = GLOBAL.net_bool(inst.GUID,"customhpbadge.isdead","ondeathdeltadirty")
 	-- v2026.6: hunger/sanity (absolute current value) + on-fire; share the customhpbadgedirty event so the
@@ -391,6 +396,7 @@ local function customhppostinit(inst)
 	inst.customhungermax = GLOBAL.net_ushortint(inst.GUID,"customhpbadge.hungermax","customhpbadgedirty")
 	inst.customsanity = GLOBAL.net_ushortint(inst.GUID,"customhpbadge.sanity","customhpbadgedirty") -- holds current sanity (absolute)
 	inst.customsanitymax = GLOBAL.net_ushortint(inst.GUID,"customhpbadge.sanitymax","customhpbadgedirty")
+	inst.customsanitydebuff = GLOBAL.net_byte(inst.GUID,"customhpbadge.sanitydebuff","customhpbadgedirty") -- max-sanity penalty, 0-100
 	inst.customsanityrate = GLOBAL.net_tinybyte(inst.GUID,"customhpbadge.sanityrate","customhpbadgedirty")
 	inst.customonfire = GLOBAL.net_bool(inst.GUID,"customhpbadge.onfire","customhpbadgedirty")
 	inst.customoverheating = GLOBAL.net_bool(inst.GUID,"customhpbadge.overheating","customhpbadgedirty")
@@ -422,9 +428,10 @@ local function customhppostinit(inst)
 			inst.customhungermax:set(math.floor(hmax + 0.5))
 		end
 		if inst.components.sanity ~= nil then
-			local smax = inst.components.sanity:GetMaxWithPenalty()
+			local smax = inst.components.sanity.max
 			inst.customsanity:set(math.ceil(inst.components.sanity:GetPercent() * smax))
 			inst.customsanitymax:set(math.floor(smax + 0.5))
+			inst.customsanitydebuff:set(math.floor(inst.components.sanity:GetPenaltyPercent() * 100 + 0.5))
 			-- seed the rate once; thereafter it's updated event-driven in onsanitydelta (no poll).
 			-- compute_sanity_ratescale mirrors the game's brain-arrow logic incl. the sleep
 			-- special-case + the no-increase-at-full / no-decrease-at-empty guards.
