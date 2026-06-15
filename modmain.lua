@@ -23,9 +23,11 @@
 --   3. Every server hook is `inst:ListenForEvent(..., handler)` on the PLAYER inst (never TheWorld)
 --      and reads that same player's components. (The v2026.3 crash was a handler whose listener
 --      source was TheWorld, so `inst.<field>` was nil.) Keep new hooks bound to the player.
---   4. `AllPlayers` is SHARD-LOCAL: UpdateBadges only sees players on the current shard. A teammate
---      in caves does NOT show in your surface badges -- that's the future v2026.7 cross-shard
---      feature, not a bug. The render loop stays bounded by #badgearray and nil-safe.
+--   4. `AllPlayers` is the client's set of players whose ENTITIES are currently networked to you
+--      -- it is BOTH shard-local AND network-view-range-limited. A teammate in caves, or on the
+--      same shard but too far away, has no local entity here, so no badge. Showing them needs an
+--      always-networked broadcast carrier (the future v2026.8 "all teammates regardless of range /
+--      shard" feature), not AllPlayers -- not a bug. The render loop stays bounded by #badgearray.
 --   5. Netvar ranges: current HP/hunger/sanity + their max use net_ushortint (0..65535; WX-78's
 --      400 HP fits, never negative); sanity rate is RATE_SCALE 0..6 in net_tinybyte (0..7). Never
 --      feed a wider/negative value into these.
@@ -287,6 +289,33 @@ local function onhungerdelta(inst, data)
 	end
 end
 
+-- Mirror widgets/sanitybadge.lua:OnUpdate so the broadcast rate matches the game's own brain
+-- arrow -- in particular its SLEEP special-case (GetRateScale() is NEUTRAL while sleeping, but
+-- the game still shows a rising arrow from the fixed sleep regen rate), plus the "no increase at
+-- full / no decrease at empty" guards.
+local function compute_sanity_ratescale(inst)
+	local sanity = inst.components.sanity
+	if sanity == nil then return GLOBAL.RATE_SCALE.NEUTRAL end
+	if inst:HasTag("sleeping") then
+		if sanity:GetPercentWithPenalty() < 1 then
+			local rate = GLOBAL.TUNING.SLEEP_SANITY_PER_TICK / GLOBAL.TUNING.SLEEP_TICK_PERIOD
+			return (rate > .2 and GLOBAL.RATE_SCALE.INCREASE_HIGH)
+				or (rate > .1 and GLOBAL.RATE_SCALE.INCREASE_MED)
+				or (rate > .01 and GLOBAL.RATE_SCALE.INCREASE_LOW)
+				or GLOBAL.RATE_SCALE.NEUTRAL
+		end
+		return GLOBAL.RATE_SCALE.NEUTRAL
+	end
+	local rs = sanity:GetRateScale()
+	local pct = sanity:GetPercentWithPenalty()
+	if rs == GLOBAL.RATE_SCALE.INCREASE_HIGH or rs == GLOBAL.RATE_SCALE.INCREASE_MED or rs == GLOBAL.RATE_SCALE.INCREASE_LOW then
+		return (pct < 1) and rs or GLOBAL.RATE_SCALE.NEUTRAL
+	elseif rs == GLOBAL.RATE_SCALE.DECREASE_HIGH or rs == GLOBAL.RATE_SCALE.DECREASE_MED or rs == GLOBAL.RATE_SCALE.DECREASE_LOW then
+		return (pct > 0) and rs or GLOBAL.RATE_SCALE.NEUTRAL
+	end
+	return GLOBAL.RATE_SCALE.NEUTRAL
+end
+
 local function onsanitydelta(inst, data)
 	local p = data and data.newpercent or 0
 	if inst.components.sanity ~= nil then
@@ -300,7 +329,10 @@ local function onsanitydelta(inst, data)
 		-- needed; net_tinybyte:set only transmits on an actual change. IF a future game update makes
 		-- sanitydelta fire only on value change, the arrow would stop clearing to neutral -> then
 		-- revert to a periodic poll of sanity:GetRateScale().
-		inst.customsanityrate:set(inst.components.sanity:GetRateScale())
+		-- Use compute_sanity_ratescale (not raw GetRateScale): it mirrors the game's brain-arrow
+		-- logic incl. the sleep special-case (GetRateScale() is NEUTRAL while sleeping) and the
+		-- no-increase-at-full / no-decrease-at-empty guards from sanitybadge.lua:OnUpdate.
+		inst.customsanityrate:set(compute_sanity_ratescale(inst))
 	end
 end
 
@@ -393,8 +425,10 @@ local function customhppostinit(inst)
 			local smax = inst.components.sanity:GetMaxWithPenalty()
 			inst.customsanity:set(math.ceil(inst.components.sanity:GetPercent() * smax))
 			inst.customsanitymax:set(math.floor(smax + 0.5))
-			-- seed the rate once; thereafter it's updated event-driven in onsanitydelta (no poll)
-			inst.customsanityrate:set(inst.components.sanity:GetRateScale())
+			-- seed the rate once; thereafter it's updated event-driven in onsanitydelta (no poll).
+			-- compute_sanity_ratescale mirrors the game's brain-arrow logic incl. the sleep
+			-- special-case + the no-increase-at-full / no-decrease-at-empty guards.
+			inst.customsanityrate:set(compute_sanity_ratescale(inst))
 		end
 		if inst.components.temperature ~= nil then
 			local t = inst.components.temperature:GetCurrent()
