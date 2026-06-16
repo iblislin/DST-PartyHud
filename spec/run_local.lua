@@ -59,8 +59,21 @@ function _G.it(name, fn)
 	end
 end
 
--- ---- load + run the spec(s) ----
-dofile("spec/statuscodec_spec.lua")
+-- ---- discover and run every spec/*_spec.lua ----
+-- io.popen("ls ...") is the portable-enough approach on this dev box (LuaJIT on Linux).
+-- CI uses real busted which auto-discovers via .busted config; this block is only for
+-- the local no-busted fallback path.
+local listing = io.popen("ls spec/*_spec.lua 2>/dev/null")
+if listing then
+    for path in listing:lines() do
+        dofile(path)
+    end
+    listing:close()
+else
+    -- Fallback: hardcoded list in case io.popen is unavailable.
+    dofile("spec/statuscodec_spec.lua")
+    dofile("spec/crossshard_spec.lua")
+end
 
 print(("\n%d passed, %d failed"):format(pass, fail))
 if fail > 0 then
