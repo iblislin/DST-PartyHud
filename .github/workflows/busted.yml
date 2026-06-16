@@ -1,0 +1,22 @@
+name: busted
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  busted:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # Lua 5.1 matches DST's runtime (the mod is Lua 5.1; LuaJIT is 5.1-compatible).
+      - uses: leafo/gh-actions-lua@v10
+        with:
+          luaVersion: "5.1"
+      - uses: leafo/gh-actions-luarocks@v4
+      - name: Install busted
+        run: luarocks install busted
+      - name: Run busted
+        # Reads .busted (ROOT=spec, lpath=scripts/?.lua, pattern=_spec).
+        # Tests the pure-logic modules (e.g. partyhud_statuscodec) with no engine deps.
+        run: busted --verbose

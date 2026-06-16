@@ -1,0 +1,9 @@
+-- busted config for CI (dstmodders/action or `busted spec/`).
+-- The spec files require modules from scripts/ — lpath makes `require("partyhud_statuscodec")` resolve.
+return {
+	default = {
+		lpath = "scripts/?.lua;./?.lua",
+		pattern = "_spec",
+		ROOT = { "spec" },
+	},
+}
