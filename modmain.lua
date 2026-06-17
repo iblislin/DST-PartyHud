@@ -485,6 +485,19 @@ local XSHARD_RPC_NAME = "status"
 -- handler; read by T4/T5 (not here).
 local foreign_store = crossshard.new()
 
+-- CLIENT-side store of the foreign players, as a plain array of codec records (NOT a crossshard
+-- store -- the server already did the upsert/dedup; the client just receives the cleaned snapshot).
+-- Replaced wholesale each time the carrier net_string goes dirty (see attach_carrier below). T5 will
+-- call get_client_foreign_records() from UpdateBadges to render these. Starts empty so a client that
+-- never receives a blob (e.g. single-shard world) reads a harmless empty table.
+local client_foreign_records = {}
+-- luacheck: push ignore get_client_foreign_records
+-- (read by T5's UpdateBadges integration, not yet wired -- silence the unused-local warning until then)
+local function get_client_foreign_records()
+	return client_foreign_records
+end
+-- luacheck: pop
+
 -- Build the local-player status records the SAME way UpdateBadges reads them: straight off the
 -- per-player netvars the server hooks already :set(). Returns an array of codec records (8 ints +
 -- userid). Players with a nil/"" userid are skipped (they can't be keyed in the store).
@@ -555,7 +568,7 @@ AddSimPostInit(function()
 		-- coercion `"1" ~= 1` is always true and the shard would fail to exclude itself (sending its
 		-- own roster back to itself -> duplicate players in foreign_store under real multiplayer).
 		local my_shard_id = GLOBAL.TheShard ~= nil and tostring(GLOBAL.TheShard:GetShardId()) or nil
-		if my_shard_id == nil then return end -- shard id not resolvable yet; skip this tick
+		if my_shard_id == nil then return end -- shard id not resolvable yet; skip send AND publish this tick (foreign_store is still empty then, so the skipped publish is a no-op)
 		local records = build_local_records()
 		local payload = codec.encode(records)
 		-- Shard_GetConnectedShards() is keyed by world/shard id. Send to each id that is NOT this
@@ -569,5 +582,55 @@ AddSimPostInit(function()
 				end
 			end
 		end
+		-- HOP-2 PUBLISH: push the CURRENT foreign players (this shard's view of the OTHER shard's
+		-- roster, accumulated by the receive handler) onto the carrier net_string so this shard's
+		-- CLIENTS get them. crossshard.active() returns the cleaned, userid-sorted record array.
+		-- net_string:set only transmits on an actual value change, so re-setting an unchanged blob
+		-- each tick is cheap (no wire traffic). Nil-guard TheWorld.net + the netvar: the carrier is
+		-- attached in AddPrefabPostInit which runs before the worlds finish coming up, but guard
+		-- anyway so an unexpected ordering can never nil-index here.
+		if GLOBAL.TheWorld.net ~= nil and GLOBAL.TheWorld.net.partyhud_foreignblob ~= nil then
+			local foreign = crossshard.active(foreign_store)
+			GLOBAL.TheWorld.net.partyhud_foreignblob:set(codec.encode(foreign))
+			if DEBUG_XSHARD then
+				print("[PartyHud] [XSHARD] published " .. #foreign .. " foreign records to carrier")
+			end
+		end
 	end)
 end)
+
+-- HOP-2 CARRIER: a net_string on the shard's network entity (TheWorld.net), which is ALWAYS
+-- replicated to every client on the shard regardless of player view-range/shard (this is exactly how
+-- the Global Positions mod attaches its component). The server :set()s the foreign-player blob onto
+-- it from the periodic task above; clients decode it on dirty into client_foreign_records.
+-- The net_string DECLARATION must be IDENTICAL on server AND client (same GUID, name, dirty event)
+-- or deserialization fails -- so it is NOT guarded by ismastersim; only the client-side decode
+-- listener is. forest_network is the surface carrier, cave_network the caves carrier; each shard has
+-- exactly one of them and TheWorld.net points at it.
+local function attach_carrier(inst)
+	inst.partyhud_foreignblob = GLOBAL.net_string(inst.GUID, "partyhud.foreignblob", "partyhud_foreignblobdirty")
+	if not GLOBAL.TheWorld.ismastersim then
+		-- CLIENT: decode the blob into the client-side store whenever the server pushes a new one.
+		-- Never throw on a bad/version-skewed blob -- log + keep the previous value, mirroring the
+		-- server-side receive handler's fail-soft contract.
+		inst:ListenForEvent("partyhud_foreignblobdirty", function()
+			local blob = inst.partyhud_foreignblob:value()
+			-- net_string starts nil before the server's first :set(); a connect-time sync can fire
+			-- the dirty event with that nil. Skip it (codec.decode is nil-safe, but this avoids a
+			-- spurious "malformed blob" log line before the first publish).
+			if blob == nil or blob == "" then return end
+			local version, records = codec.decode(blob)
+			if version == nil then
+				-- `records` carries the decode error message on failure here.
+				print("[PartyHud] [XSHARD] client dropped malformed carrier blob: " .. tostring(records))
+				return
+			end
+			client_foreign_records = records
+			if DEBUG_XSHARD then
+				print("[PartyHud] [XSHARD] client got " .. #records .. " foreign records")
+			end
+		end)
+	end
+end
+AddPrefabPostInit("forest_network", attach_carrier)
+AddPrefabPostInit("cave_network", attach_carrier)
