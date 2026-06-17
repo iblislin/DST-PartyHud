@@ -125,7 +125,26 @@ local PartyBadge = Class(Badge, function(self, owner)
     -- HP number visibility flag (client config hp_number); real value applied via
     -- SetHPNumberAlways right after construct. Default true = always shown.
     self.hp_number_always = true
+
+    -- v2026.8 cross-shard "elsewhere" treatment state. self.foreign tracks whether this slot is
+    -- currently showing a far (other-shard) player; the label Text is created lazily by SetForeign.
+    self.foreign = false
+    self.foreignlabel = nil
 end)
+
+-- v2026.8: dim alpha applied to every visible badge element when the slot shows a FOREIGN
+-- (other-shard) player, so it reads as "muted / data is ~1s stale". RGB stays at each element's
+-- base tint -- only alpha drops -- so hue (red HP / gold hunger / orange sanity) is preserved.
+local FOREIGN_ALPHA = 0.45
+local FULL_ALPHA    = 1
+
+-- Apply a uniform alpha to a UIAnim's animstate while keeping its existing RGB. We re-assert the
+-- base RGB explicitly (mult-colour is absolute, not cumulative) so a restore can't leave a stale
+-- tint behind. r,g,b default to white for elements drawn untinted (the frame).
+local function set_anim_alpha(uianim, a, r, g, b)
+    if uianim == nil then return end
+    uianim:GetAnimState():SetMultColour(r or 1, g or 1, b or 1, a)
+end
 
 -- Toggle the hunger/sanity sub-rings on/off (client config show_substatus). When disabled,
 -- the badge collapses to the HP-only layout: both sub-rings + their numbers are hidden now.
@@ -230,6 +249,61 @@ function PartyBadge:SetSanityRate(ratescale)
         self.sanityarrow:GetAnimState():PlayAnimation(anim, true)
     end
     self.sanityarrow:Show()
+end
+
+-- v2026.8 cross-shard: give this badge the "this teammate is elsewhere / data is ~1s stale" look.
+-- isforeign=true  -> dim every element (alpha down, hue preserved), show a small shard label
+--                    (e.g. "Caves"/"Surface") above the name, and force-hide the live-only rate
+--                    arrows so a stale arrow from a previous LOCAL use of this slot can't linger.
+-- isforeign=false -> restore full opacity and hide the label (the slot is being re-used for a local
+--                    player or cleared). Cheap + idempotent: safe to call every refresh.
+function PartyBadge:SetForeign(isforeign, label)
+    self.foreign = isforeign and true or false
+    local a = self.foreign and FOREIGN_ALPHA or FULL_ALPHA
+
+    -- main HP ring (red fill) + dark backing + frame (both untinted) + sub-rings (gold hunger /
+    -- orange sanity). RGB is re-asserted at each element's base tint so a foreign->local restore
+    -- returns to full colour; only alpha changes.
+    set_anim_alpha(self.anim, a, HEALTHBADGE_TINT[1], HEALTHBADGE_TINT[2], HEALTHBADGE_TINT[3])
+    set_anim_alpha(self.backing, a)     -- dark background ring (untinted)
+    set_anim_alpha(self.circleframe, a) -- frame draws untinted (white)
+    if self.hungerbadge ~= nil then
+        set_anim_alpha(self.hungerbadge.anim, a, HUNGER_TINT[1], HUNGER_TINT[2], HUNGER_TINT[3])
+        set_anim_alpha(self.hungerbadge.backing, a)
+        set_anim_alpha(self.hungerbadge.circleframe, a)
+    end
+    if self.sanitybadge ~= nil then
+        set_anim_alpha(self.sanitybadge.anim, a, SANITY_TINT[1], SANITY_TINT[2], SANITY_TINT[3])
+        set_anim_alpha(self.sanitybadge.backing, a)
+        set_anim_alpha(self.sanitybadge.circleframe, a)
+    end
+    -- text elements: name + the HP / sub-ring numbers.
+    self.name:SetColour(1, 1, 1, a)
+    if self.num ~= nil then self.num:SetColour(1, 1, 1, a) end
+    if self.hungerbadge ~= nil and self.hungerbadge.num ~= nil then self.hungerbadge.num:SetColour(1, 1, 1, a) end
+    if self.sanitybadge ~= nil and self.sanitybadge.num ~= nil then self.sanitybadge.num:SetColour(1, 1, 1, a) end
+
+    if self.foreign then
+        -- live-only extras OFF defensively (caller already passes false flags + neutral rate, but a
+        -- stale arrow shown the last time this slot rendered a LOCAL player must not linger).
+        self.hparrow:Hide()
+        self.hparrow_cur = nil
+        self.sanityarrow:Hide()
+        self.sanityarrow_cur = nil
+
+        -- shard label, created lazily. Parented to the badge AFTER the ctor children so it draws on
+        -- top (z-order: later AddChild = above), placed above the name label so the two don't overlap.
+        if self.foreignlabel == nil then
+            self.foreignlabel = self:AddChild(Text(BODYTEXTFONT, 16))
+            self.foreignlabel:SetHAlign(ANCHOR_MIDDLE)
+            self.foreignlabel:SetPosition(0, 58, 0)
+            self.foreignlabel:SetColour(0.7, 0.85, 1, 1) -- soft blue marker, fully opaque (it IS the "elsewhere" cue)
+        end
+        self.foreignlabel:SetString(label or "elsewhere")
+        self.foreignlabel:Show()
+    elseif self.foreignlabel ~= nil then
+        self.foreignlabel:Hide()
+    end
 end
 
 function PartyBadge:HideBadge()

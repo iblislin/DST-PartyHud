@@ -65,6 +65,15 @@ local phud_custombadge= _G.require "widgets/partybadge"
 local phud_xpos
 local phud_ypos
 
+-- v2026.8 cross-shard: codec + the client-side foreign-records accessor are DEFINED far below
+-- (after this point in the chunk), but UpdateBadges -- created inside onstatusdisplaysconstruct
+-- right below -- must reference them. A Lua local declared later in the chunk is NOT an upvalue
+-- of an earlier-defined closure, so forward-declare them here and assign the accessor at its
+-- real definition site. codec is required here too (require is memoised; the later require returns
+-- the same table) so UpdateBadges can unpack the flag int.
+local codec_client = _G.require "partyhud_statuscodec"
+local get_client_foreign_records -- forward decl; assigned where the client store lives (see below)
+
 if positional==0 then -- standard with minimap
 	phud_xpos= (-100)
 	phud_ypos= (-70)
@@ -212,6 +221,12 @@ local function onstatusdisplaysconstruct(self)
 			if b == me then return false end
 			return (a.userid or "") < (b.userid or "")
 		end)
+		-- v2026.8 cross-shard: track which userids are rendered as LOCAL entities this pass, so the
+		-- foreign blob can never double-draw a player who is also local (e.g. mid-migration the player
+		-- briefly exists on both shards). A local entity ALWAYS wins. Built as we assign local slots.
+		local local_userids = {}
+		-- next_slot is the first badge index NOT consumed by a local player; the foreign loop starts here.
+		local next_slot = maxbadges + 1
 		for i = 1, maxbadges do
 			local b = self.badgearray[i]
 			if b == nil then break end
@@ -232,6 +247,8 @@ local function onstatusdisplaysconstruct(self)
 				local freezing = (v.customfreezing ~= nil and v.customfreezing:value()) or false
 				if hungermax <= 0 then hungermax = 100 end
 				if sanitymax <= 0 then sanitymax = 100 end
+				if v.userid ~= nil and v.userid ~= "" then local_userids[v.userid] = true end
+				b:SetForeign(false) -- this slot is a LOCAL player: reset any "elsewhere" treatment
 				b:SetName(v:GetDisplayName())
 				b:SetPercent(hpcur, maxhp, hppenalty)
 				b:SetStatus(hunger, hungermax, sanity, sanitymax, onfire, overheating, freezing, sanitypenalty)
@@ -240,14 +257,70 @@ local function onstatusdisplaysconstruct(self)
 				if isdead then b:ShowDead() else b:ShowBadge() end
 			elseif DEBUG_SHOWALL and i <= visible_cap then
 				-- [TEST ONLY] empty seat -> mock placeholder so the full layout stays visible
+				b:SetForeign(false)
 				b:SetName("Player"..i)
 				b:SetPercent((i*17)%150, 150, (i % 3 == 0) and 0.25 or 0)
 				b:SetStatus((i*23)%150, 150, (i*41)%200, 200, (i%4)==0, (i%4)==1, (i%4)==2, (i % 3 == 0) and 0.25 or 0)
 				b:SetSanityRate((i*5)%7)
 				b:ShowBadge()
 			else
-				b:HideBadge()
+				-- first empty slot marks where foreign players begin; remember it then stop the local pass.
+				next_slot = i
+				break
 			end
+		end
+
+		-- v2026.8 cross-shard: append the FOREIGN players (the other shard + out-of-range) after the
+		-- locals, into the remaining badge slots (still bounded by maxbadges). Foreign records carry
+		-- only integers + userid; names come from the cluster-wide roster (TheNet:GetClientTable()).
+		-- DEBUG_SHOWALL fills every slot with mock locals, so there is no room for foreign there -- skip.
+		if not DEBUG_SHOWALL and next_slot <= maxbadges then
+			-- userid -> display name, built once per refresh from the cluster roster.
+			local namebyuserid = {}
+			local clienttable = _G.TheNet ~= nil and _G.TheNet:GetClientTable() or nil
+			if clienttable ~= nil then
+				for _, c in ipairs(clienttable) do
+					if c.userid ~= nil and c.userid ~= "" then namebyuserid[c.userid] = c.name end
+				end
+			end
+
+			-- This client's shard determines the label for the foreign one (2-shard cluster): if we
+			-- are in the Caves the others are on the Surface, and vice versa.
+			local foreign_label = (_G.TheWorld ~= nil and _G.TheWorld:HasTag("cave")) and "Surface" or "Caves"
+
+			local slot = next_slot
+			for _, rec in ipairs(get_client_foreign_records()) do
+				if slot > maxbadges then break end
+				-- a local entity always wins: never double-draw a userid already shown as local.
+				if not (rec.userid ~= nil and local_userids[rec.userid]) then
+					local b = self.badgearray[slot]
+					if b == nil then break end
+					-- foreign records carry no hunger MAX, only the current hunger value -- default the
+					-- scale so the ring still reads sensibly (matches the local-path hungermax<=0 default).
+					local hungermax = 100
+					local sanitymax = (rec.sanity_max ~= nil and rec.sanity_max > 0) and rec.sanity_max or 100
+					local flags = codec_client.unpackflags(rec.flags)
+					b:SetForeign(true, foreign_label)
+					b:SetName(namebyuserid[rec.userid] or "?")
+					b:SetPercent(rec.hp_cur or 0, rec.hp_max, (rec.hp_penalty or 0) / 100)
+					-- SIMPLIFIED status: hunger/sanity + penalty shown, but NO live thermal pulse for far
+					-- players (fire/overheat/freeze forced false -- misleading at ~1s lag).
+					b:SetStatus(rec.hunger, hungermax, rec.sanity_cur, sanitymax, false, false, false, (rec.sanity_penalty or 0) / 100)
+					b:SetSanityRate(0) -- neutral: no rate arrow for far players
+					if flags.dead then b:ShowDead() else b:ShowBadge() end
+					slot = slot + 1
+				end
+			end
+			next_slot = slot
+		end
+
+		-- trailing-slot clear: any badge past the last assigned (local OR foreign) slot is hidden,
+		-- so departed players leave no stale name/ring behind.
+		for i = next_slot, maxbadges do
+			local b = self.badgearray[i]
+			if b == nil then break end
+			b:SetForeign(false)
+			b:HideBadge()
 		end
 	end
 	-- visibility is folded into UpdateBadges; keep the old name as an alias for safety
@@ -491,12 +564,11 @@ local foreign_store = crossshard.new()
 -- call get_client_foreign_records() from UpdateBadges to render these. Starts empty so a client that
 -- never receives a blob (e.g. single-shard world) reads a harmless empty table.
 local client_foreign_records = {}
--- luacheck: push ignore get_client_foreign_records
--- (read by T5's UpdateBadges integration, not yet wired -- silence the unused-local warning until then)
-local function get_client_foreign_records()
+-- assign the forward-declared accessor (declared near the top so UpdateBadges can capture it as an
+-- upvalue). T5's UpdateBadges integration reads this to render the foreign players.
+get_client_foreign_records = function()
 	return client_foreign_records
 end
--- luacheck: pop
 
 -- Build the local-player status records the SAME way UpdateBadges reads them: straight off the
 -- per-player netvars the server hooks already :set(). Returns an array of codec records (8 ints +
