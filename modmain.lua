@@ -453,3 +453,121 @@ local function customhppostinit(inst)
 	end
 end
 AddPlayerPostInit(customhppostinit)
+
+-- ============================================================================================
+-- v2026.8 CROSS-SHARD STATUS TRANSPORT (T3 of the cross-shard feature)
+--
+-- AllPlayers is shard-local + network-view-range-limited (SHARD INVARIANT #4), so a teammate in
+-- the caves (a SEPARATE shard) has no entity on this server and never gets a badge. To show them,
+-- each shard's SERVER batches its LOCAL players' status (the same integers the per-player netvars
+-- above already carry) and ships it to the other shard(s) over the engine's shard mod RPC. The
+-- receiving shard STOREs the foreign snapshot. Publishing the foreign data to clients + rendering
+-- it are LATER tasks (T4/T5); T3 is purely the server<->server transport + store-on-receive.
+--
+-- All of this is SERVER-only and runs on BOTH shards (ismastersim is true on Master AND Caves --
+-- SHARD INVARIANT #1). The receive handler ONLY stores: a shard RPC handler that sends a shard RPC
+-- in the same frame gets dropped (networkclientrpc.lua), so sending lives in a separate periodic
+-- task, never inside the handler.
+-- ============================================================================================
+local codec = _G.require "partyhud_statuscodec"
+local crossshard = _G.require "partyhud_crossshard"
+
+-- DEBUG: print a sentinel on every send + receive so the round-trip is visible in the shard logs.
+-- Default true for T3 verification; flipped to false (or wired to a config) in a later task.
+local DEBUG_XSHARD = true -- TODO(T6): flip to false / wire to a config option before shipping
+
+-- The mod RPC namespace/name pair. Namespace is the mod's folder; any stable string works as long
+-- as both shards (running the same mod build) agree on it.
+local XSHARD_RPC_NAMESPACE = "partyhud"
+local XSHARD_RPC_NAME = "status"
+
+-- ONE module-level store of the OTHER shards' players, keyed by userid. Filled by the receive
+-- handler; read by T4/T5 (not here).
+local foreign_store = crossshard.new()
+
+-- Build the local-player status records the SAME way UpdateBadges reads them: straight off the
+-- per-player netvars the server hooks already :set(). Returns an array of codec records (8 ints +
+-- userid). Players with a nil/"" userid are skipped (they can't be keyed in the store).
+local function build_local_records()
+	local records = {}
+	for _, v in ipairs(_G.AllPlayers) do
+		local userid = v.userid
+		if userid ~= nil and userid ~= "" then
+			-- pack the boolean status into the codec's flag int (fire/overheat/freeze/dead;
+			-- ghost is folded into dead here -- the badge only distinguishes alive vs dead).
+			local flags = codec.packflags({
+				fire     = (v.customonfire ~= nil and v.customonfire:value()) or false,
+				overheat = (v.customoverheating ~= nil and v.customoverheating:value()) or false,
+				freeze   = (v.customfreezing ~= nil and v.customfreezing:value()) or false,
+				dead     = (v.customisdead ~= nil and v.customisdead:value()) or false,
+			})
+			records[#records + 1] = {
+				userid         = userid,
+				hp_cur         = (v.customhpbadgepercent ~= nil and v.customhpbadgepercent:value()) or 0,
+				hp_max         = (v.customhpbadgemax ~= nil and v.customhpbadgemax:value()) or 0,
+				hp_penalty     = (v.customhpbadgedebuff ~= nil and v.customhpbadgedebuff:value()) or 0,
+				hunger         = (v.customhunger ~= nil and v.customhunger:value()) or 0,
+				sanity_cur     = (v.customsanity ~= nil and v.customsanity:value()) or 0,
+				sanity_max     = (v.customsanitymax ~= nil and v.customsanitymax:value()) or 0,
+				sanity_penalty = (v.customsanitydebuff ~= nil and v.customsanitydebuff:value()) or 0,
+				flags          = flags,
+			}
+		end
+	end
+	return records
+end
+
+-- RECEIVE handler + RPC handle obtained at MOD-LOAD (top-level), NOT deferred. The shard mod RPC
+-- namespace must be registered during mod init -- if you register it later (e.g. inside
+-- AddSimPostInit) the engine can't encode the namespace on send and logs "Error encoding lua RPC
+-- mod namespace", so the RPC silently never transmits. Registering a handler needs no TheWorld
+-- (it just installs a callback that fires when an RPC arrives, which is after the worlds are up),
+-- so it belongs here at load time. Only the SEND loop below needs TheWorld/TheShard.
+-- The handler ONLY stores; it must NOT send a shard RPC (same-frame self-send is dropped).
+GLOBAL.AddShardModRPCHandler(XSHARD_RPC_NAMESPACE, XSHARD_RPC_NAME, function(sender_shard_id, payload)
+	local version, records = codec.decode(payload)
+	if version == nil then
+		-- `records` carries the decode error message on failure. Log + drop, never throw, so a
+		-- version-skewed / garbled payload from a hot-reloaded peer can't crash the sim.
+		print("[PartyHud] [XSHARD] dropped malformed payload from shard "
+			.. tostring(sender_shard_id) .. ": " .. tostring(records))
+		return
+	end
+	crossshard.upsert(foreign_store, records, GLOBAL.GetTime())
+	if DEBUG_XSHARD then
+		print("[PartyHud] [XSHARD] recv " .. #records .. " records from shard " .. tostring(sender_shard_id))
+	end
+end)
+local xshard_rpc_handle = GLOBAL.GetShardModRPC(XSHARD_RPC_NAMESPACE, XSHARD_RPC_NAME)
+
+-- SEND loop: needs TheWorld/TheShard, which do NOT exist at modmain top-level (created during
+-- PopulateWorld, BEFORE ModManager:SimPostInit -- gamelogic.lua), so it's deferred to
+-- AddSimPostInit. ismastersim is true on BOTH shards, which is what we want (each shard sends its
+-- own roster and receives the other's via the handler registered above).
+AddSimPostInit(function()
+	if GLOBAL.TheWorld == nil or not GLOBAL.TheWorld.ismastersim then return end
+	-- ~2 Hz; for T3 sends UNCONDITIONALLY every tick (even an empty roster) so the transport can be
+	-- proven headless with no players online. The dirty-coalescing / burst / keepalive cadence
+	-- optimization is a LATER task (T6) -- intentionally not built here.
+	GLOBAL.TheWorld:DoPeriodicTask(0.5, function()
+		-- Recompute each tick so it resolves once TheShard is ready. tostring() is REQUIRED:
+		-- Shard_GetConnectedShards() keys are STRINGS but GetShardId() returns a NUMBER, so without
+		-- coercion `"1" ~= 1` is always true and the shard would fail to exclude itself (sending its
+		-- own roster back to itself -> duplicate players in foreign_store under real multiplayer).
+		local my_shard_id = GLOBAL.TheShard ~= nil and tostring(GLOBAL.TheShard:GetShardId()) or nil
+		if my_shard_id == nil then return end -- shard id not resolvable yet; skip this tick
+		local records = build_local_records()
+		local payload = codec.encode(records)
+		-- Shard_GetConnectedShards() is keyed by world/shard id. Send to each id that is NOT this
+		-- shard and is currently available (gating avoids RPCs into a down shard). EXPLICIT target
+		-- shard id -- a nil target leaks the RPC to clients (known bug).
+		for world_id in pairs(GLOBAL.Shard_GetConnectedShards()) do
+			if world_id ~= my_shard_id and GLOBAL.Shard_IsWorldAvailable(world_id) then
+				GLOBAL.SendModRPCToShard(xshard_rpc_handle, world_id, payload)
+				if DEBUG_XSHARD then
+					print("[PartyHud] [XSHARD] sent " .. #records .. " records to shard " .. tostring(world_id))
+				end
+			end
+		end
+	end)
+end)
