@@ -47,6 +47,10 @@ local positional=GetModConfigData("position", true)
 local skip_self = (GetModConfigData("show_self", true) == 0) -- if true, don't draw a badge for yourself
 local show_substatus = (GetModConfigData("show_substatus", true) ~= 0) -- if false, hide the hunger/sanity sub-rings
 local hp_number_always = (GetModConfigData("hp_number", true) == 1) -- false = HP number shows only on hover
+-- CLIENT-render-only toggle: when false, UpdateBadges renders ONLY local players (the foreign-append
+-- block is skipped). Does NOT gate the server-side send/publish -- other clients may still want it on.
+-- ~=0 makes a missing/older config default to shown.
+local show_crossshard = (GetModConfigData("show_crossshard", true) ~= 0)
 local DEBUG_SHOWALL = false -- [TEST ONLY] fill all badge slots so layout is visible solo
 -- [vertical layout tunables] edit these then restart client; only used when layout=Vertical
 local VERT_X    = 0    -- horizontal pos (more negative = further left)
@@ -274,7 +278,10 @@ local function onstatusdisplaysconstruct(self)
 		-- locals, into the remaining badge slots (still bounded by maxbadges). Foreign records carry
 		-- only integers + userid; names come from the cluster-wide roster (TheNet:GetClientTable()).
 		-- DEBUG_SHOWALL fills every slot with mock locals, so there is no room for foreign there -- skip.
-		if not DEBUG_SHOWALL and next_slot <= maxbadges then
+		-- show_crossshard (client option) additionally gates this: when off, only local players render.
+		-- The trailing-slot clear below still runs, so a slot that WAS foreign last refresh gets
+		-- SetForeign(false) + HideBadge() (next_slot stays = the first non-local slot here).
+		if show_crossshard and not DEBUG_SHOWALL and next_slot <= maxbadges then
 			-- userid -> display name, built once per refresh from the cluster roster.
 			local namebyuserid = {}
 			local clienttable = _G.TheNet ~= nil and _G.TheNet:GetClientTable() or nil
@@ -547,7 +554,13 @@ local crossshard = _G.require "partyhud_crossshard"
 
 -- DEBUG: print a sentinel on every send + receive so the round-trip is visible in the shard logs.
 -- Default true for T3 verification; flipped to false (or wired to a config) in a later task.
-local DEBUG_XSHARD = true -- TODO(T6): flip to false / wire to a config option before shipping
+local DEBUG_XSHARD = false -- gates the per-tick [PartyHud] [XSHARD] log spam; off for normal play
+
+-- Foreign-entry expiry TTL (seconds). The send is a fixed ~2 Hz unconditional full snapshot, so a
+-- healthy peer refreshes every entry's timestamp ~every 0.5s. If a peer shard CRASHES / stops
+-- sending, its players stop being refreshed and age out after ~3s (6 missed sends) rather than
+-- lingering forever. Must be comfortably larger than the 0.5s send period.
+local XSHARD_TTL = 3
 
 -- The mod RPC namespace/name pair. Namespace is the mod's folder; any stable string works as long
 -- as both shards (running the same mod build) agree on it.
@@ -652,6 +665,24 @@ AddSimPostInit(function()
 				if DEBUG_XSHARD then
 					print("[PartyHud] [XSHARD] sent " .. #records .. " records to shard " .. tostring(world_id))
 				end
+			end
+		end
+		-- STALE-ENTRY CLEANUP (before publishing). Two independent passes:
+		--   (1) EXPIRE: age out entries no longer being refreshed -- catches a peer shard that
+		--       CRASHED / stopped sending (its players stop refreshing and age past XSHARD_TTL).
+		crossshard.expire(foreign_store, GLOBAL.GetTime(), XSHARD_TTL)
+		--   (2) RECONCILE against the CLUSTER roster: drop any foreign player who has left the cluster
+		--       entirely. TheNet:GetClientTable() is cluster-wide (covers BOTH shards), so it's the
+		--       authoritative live set. Nil-guard it: if unavailable this tick, SKIP reconcile -- never
+		--       reconcile against an empty set (that would wipe everything).
+		if GLOBAL.TheNet ~= nil and GLOBAL.TheNet.GetClientTable ~= nil then
+			local clienttable = GLOBAL.TheNet:GetClientTable()
+			if clienttable ~= nil then
+				local live_set = {}
+				for _, c in ipairs(clienttable) do
+					if c.userid ~= nil and c.userid ~= "" then live_set[c.userid] = true end
+				end
+				crossshard.reconcile(foreign_store, live_set)
 			end
 		end
 		-- HOP-2 PUBLISH: push the CURRENT foreign players (this shard's view of the OTHER shard's

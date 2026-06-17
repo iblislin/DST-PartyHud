@@ -78,4 +78,15 @@ configuration_options=
 	default=0,
 	client = true,
 	},
+		{
+	name="show_crossshard",
+	label="Show Cross-Shard Teammates",
+	hover="Show teammates who are on the other shard (Caves/Surface) or out of network range, via the always-replicated broadcast. Hide to render only locally-visible players",
+	options={
+			{description = "Show", data = 1},
+			{description = "Hide", data = 0}
+		},
+	default=1,
+	client = true,
+	},
 }
