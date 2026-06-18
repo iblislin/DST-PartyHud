@@ -118,7 +118,7 @@ local PartyBadge = Class(Badge, function(self, owner)
     -- tab_arcane.tex draws its skull glyph off-center within its own texture bounds, so the geometric
     -- center (x=0) looks shifted right; nudge left to visually center it. Scale kept a touch under the
     -- ring so it doesn't overflow the backing. Both visually tuned.
-    self.dead:SetPosition(-7, 0, 0)
+    self.dead:SetPosition(-6, 0, 0)
     self.dead:SetScale(0.5)
     self.dead:Hide()
 
