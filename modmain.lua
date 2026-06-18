@@ -474,7 +474,22 @@ local function onstatusdisplaysconstruct(self)
 			-- this client's own shard id (NUMBER, matching the codec v2 `origin` field). A foreign
 			-- record whose origin == my_shard is a SAME-shard teammate that fell out of network
 			-- view-range -- rendered "far" rather than with the cross-shard label below.
-			local my_shard = (_G.TheShard ~= nil and _G.TheShard:GetShardId()) or nil
+			-- IMPORTANT: TheShard:GetShardId() is UNRELIABLE on a pure client -- it does NOT return the
+			-- server shard's id (observed: master server id 1, but the client's call yields a non-matching
+			-- value, so every same-shard-far teammate wrongly got the cross-shard "Caves"/"Surface" label).
+			-- Derive it from this client's OWN record in the carrier blob instead: the server stamps every
+			-- local player -- INCLUDING ThePlayer -- with this shard's origin, so ThePlayer's record origin
+			-- IS my shard id. nil until the first blob carrying ThePlayer arrives (-> records fall to the
+			-- cross-shard label for that brief window, self-correcting on the next refresh).
+			local my_shard = nil
+			if _G.ThePlayer ~= nil and _G.ThePlayer.userid ~= nil then
+				for _, r in ipairs(get_client_foreign_records()) do
+					if r.userid == _G.ThePlayer.userid and r.origin ~= nil then
+						my_shard = r.origin
+						break
+					end
+				end
+			end
 
 			local slot = next_slot
 			for _, rec in ipairs(get_client_foreign_records()) do
@@ -950,6 +965,13 @@ local function attach_carrier(inst)
 			client_foreign_records = records
 			if DEBUG_XSHARD then
 				print("[PartyHud] [XSHARD] client got " .. #records .. " foreign records")
+			end
+			-- A far teammate reaches this client ONLY via the blob -- there is no `playerentered` event
+			-- for an out-of-view player -- so the blob update MUST itself drive a badge refresh, or the
+			-- new foreign record never renders until some unrelated local event happens to fire
+			-- UpdateBadges. (Same guarded accessor as the client refresh path elsewhere.)
+			if _G.ThePlayer ~= nil and _G.ThePlayer.UpdateBadges ~= nil then
+				_G.ThePlayer.UpdateBadges()
 			end
 		end)
 	end
