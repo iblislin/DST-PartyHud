@@ -20,7 +20,7 @@
 
 ---
 
-## 1. 目前已有的功能基線(v2026.7)
+## 1. 目前已有的功能基線(v2026.8 — SHIPPED 2026-06-18)
 
 判斷「新不新」的對照基準 —— 以下**已經有了,不要重複列**:
 
@@ -31,6 +31,8 @@
 - **理智速率箭頭**(上升/下降,含睡覺特例)
 - 版面:**水平列** / **垂直自動換欄**(依螢幕高度、視窗縮放重排、避開地圖按鈕)
 - 每位玩家可自訂選項:顯示自己的 badge / 子環開關 / HP 數字(always vs hover)
+- **(v2026.8)跨 shard + 同-shard-遠距隊友**:看得到對面 shard(洞穴↔地面)與本 shard 超出網路視距的隊友;遠方隊友**變暗 + 標籤**(跨 shard =「Caves」/「Surface」、同 shard 遠 =「far」),視野內 local 永遠優先(不重複)。靠 shard mod RPC + `TheWorld.net` carrier `net_string` + 版本化 codec(`partyhud_statuscodec` / `partyhud_crossshard`)。選項 **Show Cross-Shard Teammates**。
+- **(v2026.8)版面強化**:proportional-scale 換欄數穩定(縮放/小視窗不再塌成一欄)、per-column 高度(只有最右欄留地圖鍵空間)、閃避雨量計與角色第二排徽章(Abigail / 靈感)、**背包感知**(側背包左移 / 整合式背包底部預留,開關/裝卸/換背包即時反應)、死亡骷髏置中。
 
 ---
 
@@ -39,7 +41,7 @@
 這些是 DST 架構限制,反覆出現在下面的「限制」欄,先集中講:
 
 1. **owner-only classified 資料**:溫度、濕度、精確 buff 狀態等都掛在每位玩家的 `player_classified`,**只對該玩家自己的 client 廣播**。要顯示隊友的這些值,得像我們現在對 HP/hunger/sanity 一樣**在 server hook 廣播自訂 netvar**(不能在 client 直接讀隊友的)。延伸現有 pattern 即可,但每多一個值就多一組 netvar + hook。
-2. **跨 shard(洞穴↔地面)**:`AllPlayers` 是 shard-local + 限網路視距。要顯示對面 shard 的隊友,**唯一可行傳輸是 shard mod RPC**(`SendModRPCToShard`,server↔server,payload 要序列化成 string)。這是 v2026.8 已規劃的大工程,見 memory `partyhud-v2026-8-crossshard-research`。任何「跨 shard」點子都吃這個前提。
+2. **跨 shard(洞穴↔地面)**:`AllPlayers` 是 shard-local + 限網路視距。要顯示對面 shard 的隊友,**唯一可行傳輸是 shard mod RPC**(`SendModRPCToShard`,server↔server,payload 要序列化成 string)。**✅ 這套基礎建設在 v2026.8 已經蓋好且可擴充** —— shard RPC + `TheWorld.net` carrier `net_string` + **帶 protocol version byte 的 codec**(`partyhud_statuscodec`,v1→v2 已示範加 `origin` 欄位)。所以「某個新數值也要跨 shard 看到」現在只是 **bump codec 版本 + 加一個欄位 + 既有 server hook 廣播**,不再是從零搭傳輸。新 codec 欄位記得保持 backward-tolerant decode(舊 peer 解不到新欄位 → nil,優雅降級)。見 memory `partyhud-v2026-8-crossshard-research`。
 3. **server hook 才拿得到的資料**:背包 / 裝備 / 手持物等不在 classified,要額外 server-side 廣播 —— 工時高、CP 值通常低。
 4. **視覺對齊**:任何新 widget 都該跑 `dst-badge-visual-audit` skill(build 名 / tint / scale / z-order / 填充方向),避免重蹈 penalty 弧反向那種雷。
 
@@ -75,11 +77,9 @@
 - **價值 中高 / 工時 低**。純 client keybind。
 - **實作提示**:用 mod 的 key-bind 設定;切換時改 badge 的子元件顯示 + 重排。
 
-### 5. 洞穴/地面(shard)所在指示  ✅
+### 5. 洞穴/地面(shard)所在指示  — ✅ 已出貨 (v2026.8)
 - **是什麼**:badge 標出隊友目前在哪個 shard(地面 / 洞穴)。
-- **為什麼**:高戰略價值、真正的差異化(沒人乾淨地做)。
-- **價值 高 / 工時 高 —— 卡跨 shard plumbing**。
-- **實作提示**:**跟已規劃的 v2026.8 跨 shard 狀態一起做**,別獨立做(共用同一套 shard RPC + `GetClientTable()` 名冊)。見 memory `partyhud-v2026-8-crossshard-research`。
+- **狀態**:**v2026.8 已實現** —— 跨 shard 隊友標「Caves」/「Surface」,同-shard-遠標「far」,皆變暗。原本「工時 高 — 卡跨 shard plumbing」已不成立(plumbing 蓋好了)。保留此條僅作紀錄;不再是 backlog 項目。
 
 **榮譽提名**:**點 badge → 地圖 ping / 聊天宣告**(Global Positions 的 alt+click ping + Status Announcements)。價值高;最便宜的純 client 版本是「在聊天宣告該玩家狀態/位置」,真正的地圖 ping 需要更多 plumbing。
 
@@ -125,7 +125,7 @@
 ### 存在 / 位置
 | 點子 | 是什麼 | 靈感來源 | 價值/工時/限制 |
 |---|---|---|---|
-| 洞穴/地面指示 | badge 標所在 shard | (沒人乾淨做) | 高 / **高 — 需跨 shard**(見 Top 5 #5) |
+| ~~洞穴/地面指示~~ | badge 標所在 shard | (沒人乾淨做) | ✅ **已出貨 v2026.8**(Caves/Surface/far 標籤) |
 | AFK/閒置指示 | 玩家沒動就變暗/顯示 Z | (空白) | 低–中 / 中。需 client 端追蹤移動,距離/跨 shard 下不可靠 |
 | 距離/方向 | 顯示與隊友的距離 + 箭頭 | Global Positions、Extended Indicators、Compass | 中 / 中。同 shard 方向簡單,距離數字是不錯的疊加 |
 | 狀態分享 opt-out | 讓玩家隱藏自己的詳細狀態 | Global Positions(scoreboard opt-out) | 低 / 中。禮貌性功能,需共享 netvar flag,對狀態 HUD 大概過度設計 |
