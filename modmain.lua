@@ -237,11 +237,13 @@ local function layout_badges(badgearray)
 	--    shifted it off); later columns extend toward the screen bottom (`free`, +BACKPACK_BOTTOM_EXTRA
 	--    in Mode B's taller-bar case).
 	local free = VERT_BOTTOM_RESERVE_FREE + ((bpmode == 2) and BACKPACK_BOTTOM_EXTRA or 0)
-	-- The top dodge (status second row) is INDEPENDENT of the Mode-A left shift (backpack): shifting
-	-- left clears the right-edge backpack, but the top-right status cluster stays put -- and a char
-	-- badge can DISPLACE the moisture meter left into the shifted column's path (Wigfrid case), so the
-	-- shifted HUD would otherwise cover it. Always dodge based on the second row, in every mode.
-	local dodge_cols = second_row_cols
+	-- The top dodge (status second row) is separate from the Mode-A left shift (backpack). In Mode A the
+	-- columns shift LEFT ~BACKPACK_SHIFT_X, so the (fixed, top-right) status band covers FEWER of them:
+	-- a single home-column badge (moisture alone, or a resting char badge) is cleared by the shift; only
+	-- the WIDE case (rain + Abigail/inspiration DISPLACES the moisture meter left) still lands one badge
+	-- under the shifted col 0 -> dodge just col 0 there (col 1 has moved left, now clear -- no gap).
+	-- Outside Mode A the band covers `second_row_cols` (0/1/2) columns directly.
+	local dodge_cols = (bpmode == 1) and ((second_row_cols >= 2) and 1 or 0) or second_row_cols
 	-- Fill top-to-bottom, wrapping LEFTWARD (right-anchored list). compute_percol always returns >=1 so
 	-- col advances and i grows each pass; `col <= n` is a belt-and-suspenders bound on the loop.
 	local n = #badgearray
