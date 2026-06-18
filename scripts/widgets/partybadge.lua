@@ -133,6 +133,13 @@ local PartyBadge = Class(Badge, function(self, owner)
     -- currently showing a far (other-shard) player; the label Text is created lazily by SetForeign.
     self.foreign = false
     self.foreignlabel = nil
+
+    -- v2026.9 low-HP alert state. low_hp_threshold (0..1, 0 = disabled) is set after construct from
+    -- the low_hp_alert config; the rest are driven by _set_low_hp / the blink task.
+    self.low_hp_threshold = 0
+    self.low_hp = false
+    self._blink_on = false
+    self._blink_task = nil
 end)
 
 -- v2026.8: dim alpha applied to every visible badge element when the slot shows a FOREIGN
@@ -140,6 +147,15 @@ end)
 -- base tint -- only alpha drops -- so hue (red HP / gold hunger / orange sanity) is preserved.
 local FOREIGN_ALPHA = 0.45
 local FULL_ALPHA    = 1
+
+-- v2026.9 low-HP alert: a blinking red ring border (circleframe) when a teammate's HP drops
+-- below a player-chosen threshold. Distinct from the thermal warning pulse (self.warning) so both
+-- cues can show at once. LOW_HP_TINT is brighter than the HP fill {174,21,21}/255 so it pops
+-- against the red ring underneath. NOTE: circleframe's animstate also carries the heart ICON glyph
+-- (OverrideSymbol("icon",...) in Badge._ctor), so SetMultColour tints the heart red too during the
+-- alarm phase -- intended (a red heart reads as a health alarm).
+local LOW_HP_TINT         = { 1, 0.15, 0.15 }
+local LOW_HP_BLINK_PERIOD = 0.6 -- seconds per toggle (1.2s full on/off cycle)
 
 -- Apply a uniform alpha to a UIAnim's animstate while keeping its existing RGB. We re-assert the
 -- base RGB explicitly (mult-colour is absolute, not cumulative) so a restore can't leave a stale
@@ -190,6 +206,10 @@ function PartyBadge:SetPercent(cur, max, penaltypercent)
         self.num:SetString(tostring(math.floor((cur or 0) + 0.5)))
         if self.hp_number_always then self.num:Show() end
     end
+    -- v2026.9 low-HP alert: blink the border below the configured threshold (fraction of max HP).
+    -- 0 threshold = disabled. Runs for BOTH the local and the foreign path (the foreign render also
+    -- calls SetPercent with the relayed hp_cur/hp_max), so far/cross-shard badges blink for free.
+    self:_set_low_hp(self.low_hp_threshold > 0 and (cur / m) < self.low_hp_threshold)
 end
 
 -- v2026.6: hunger_cur/sanity_cur are absolute current values (the displayed number);
@@ -254,6 +274,45 @@ function PartyBadge:SetSanityRate(ratescale)
     self.sanityarrow:Show()
 end
 
+-- v2026.9: single source of truth for the ring-border (circleframe) colour. Both the low-HP blink
+-- and the foreign-dim want to write circleframe; routing every write through here keeps them from
+-- desyncing (same idea as the v2026.8 "one cache-syncing relayout fn" fix).
+function PartyBadge:_apply_frame_colour()
+    if self.circleframe == nil then return end
+    if self.low_hp and self._blink_on then
+        -- alarm phase: red at FULL alpha so the alert stays visible even on a dimmed far badge.
+        self.circleframe:GetAnimState():SetMultColour(LOW_HP_TINT[1], LOW_HP_TINT[2], LOW_HP_TINT[3], 1)
+    else
+        -- rest phase / not low: baseline white border at the badge's current alpha (dim if foreign).
+        local a = self.foreign and FOREIGN_ALPHA or FULL_ALPHA
+        self.circleframe:GetAnimState():SetMultColour(1, 1, 1, a)
+    end
+end
+
+-- v2026.9: enter/leave the low-HP blinking state. Idempotent. The 0.6s toggle task is parked on
+-- self.inst (the widget entity) so Widget:Kill tears it down; we also cancel it explicitly here.
+function PartyBadge:_set_low_hp(islow)
+    islow = islow and true or false
+    if islow == self.low_hp then return end
+    self.low_hp = islow
+    if islow then
+        self._blink_on = true -- go red immediately, then toggle
+        if self._blink_task == nil and self.inst ~= nil then
+            self._blink_task = self.inst:DoPeriodicTask(LOW_HP_BLINK_PERIOD, function()
+                self._blink_on = not self._blink_on
+                self:_apply_frame_colour()
+            end)
+        end
+    else
+        if self._blink_task ~= nil then
+            self._blink_task:Cancel()
+            self._blink_task = nil
+        end
+        self._blink_on = false
+    end
+    self:_apply_frame_colour()
+end
+
 -- v2026.8 cross-shard: give this badge the "this teammate is elsewhere / data is ~1s stale" look.
 -- isforeign=true  -> dim every element (alpha down, hue preserved), show a small shard label
 --                    (e.g. "Caves"/"Surface") above the name, and force-hide the live-only rate
@@ -272,7 +331,10 @@ function PartyBadge:SetForeign(isforeign, label, sameshard)
     -- returns to full colour; only alpha changes.
     set_anim_alpha(self.anim, a, HEALTHBADGE_TINT[1], HEALTHBADGE_TINT[2], HEALTHBADGE_TINT[3])
     set_anim_alpha(self.backing, a)     -- dark background ring (untinted)
-    set_anim_alpha(self.circleframe, a) -- frame draws untinted (white)
+    -- circleframe (the ring border) is owned by _apply_frame_colour: it reconciles the foreign dim
+    -- (self.foreign, set above) with the low-HP blink, so a foreign<->local flip can't strand a
+    -- stale border tint. (Replaces the direct set_anim_alpha(self.circleframe, a) call.)
+    self:_apply_frame_colour()
     if self.hungerbadge ~= nil then
         set_anim_alpha(self.hungerbadge.anim, a, HUNGER_TINT[1], HUNGER_TINT[2], HUNGER_TINT[3])
         set_anim_alpha(self.hungerbadge.backing, a)
@@ -313,6 +375,7 @@ function PartyBadge:SetForeign(isforeign, label, sameshard)
 end
 
 function PartyBadge:HideBadge()
+    self:_set_low_hp(false) -- stop any blink task before hiding a departed / empty slot
     self:Hide()
 end
 
@@ -320,6 +383,8 @@ function PartyBadge:ShowBadge()
     self:Show()
     if self.anim ~= nil then self.anim:Show() end
     if self.circleframe ~= nil then self.circleframe:Show() end
+    self:_apply_frame_colour() -- reconcile the border tint on reveal, so it never depends on a
+                               -- caller happening to run SetPercent right after ShowBadge
     if self.num ~= nil and self.hp_number_always then self.num:Show() end
     self.name:Show()
     -- only reveal the sub-rings when they're enabled (their numbers stay hover-only)
@@ -335,6 +400,8 @@ end
 
 function PartyBadge:ShowDead()
     self:Show()
+    self:_set_low_hp(false) -- a dead/ghost teammate shows the skull, not a low-HP blink; stop it
+                            -- (SetPercent ran before ShowDead and may have started the blink at hp 0)
     if self.anim ~= nil then self.anim:Hide() end
     if self.circleframe ~= nil then self.circleframe:Hide() end
     if self.num ~= nil then self.num:Hide() end
