@@ -115,8 +115,11 @@ local PartyBadge = Class(Badge, function(self, owner)
 
     -- dead indicator
     self.dead = self:AddChild(Image("images/hud.xml", "tab_arcane.tex"))
-    self.dead:SetPosition(0, 0, 0)
-    self.dead:SetScale(0.7)
+    -- tab_arcane.tex draws its skull glyph off-center within its own texture bounds, so the geometric
+    -- center (x=0) looks shifted right; nudge left to visually center it. Scale kept a touch under the
+    -- ring so it doesn't overflow the backing. Both visually tuned.
+    self.dead:SetPosition(-5, 0, 0)
+    self.dead:SetScale(0.6)
     self.dead:Hide()
 
     -- whether the hunger/sanity sub-rings are shown (driven by the show_substatus config)
