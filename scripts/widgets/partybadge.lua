@@ -299,7 +299,7 @@ function PartyBadge:SetForeign(isforeign, label)
         if self.foreignlabel == nil then
             self.foreignlabel = self:AddChild(Text(BODYTEXTFONT, 16))
             self.foreignlabel:SetHAlign(ANCHOR_MIDDLE)
-            self.foreignlabel:SetPosition(0, 58, 0)
+            self.foreignlabel:SetPosition(0, 50, 0)
             self.foreignlabel:SetColour(0.7, 0.85, 1, 1) -- soft blue marker, fully opaque (it IS the "elsewhere" cue)
         end
         self.foreignlabel:SetString(label or "elsewhere")
