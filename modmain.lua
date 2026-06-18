@@ -801,7 +801,11 @@ local function build_local_records()
 	-- encode->decode (math.floor on encode, tonumber on decode) and is therefore a number. Normalizing
 	-- here removes a latent "1" == 1 -> false trap if a future path ever compared a freshly-built
 	-- record's origin before re-encoding. Falls back to 0 if TheShard isn't resolvable yet.
-	local my_origin = tonumber((GLOBAL.TheShard ~= nil and GLOBAL.TheShard:GetShardId()) or 0) or 0
+	-- IMPORTANT: use GLOBAL.tonumber, NOT bare tonumber -- the DST modmain sandbox env (mods.lua)
+	-- whitelists tostring but NOT tonumber, so a bare tonumber is nil here and crashes the shard the
+	-- moment this 0.5s task fires. That only happens once a player is online (pause_when_empty masks
+	-- it in any no-player load-smoke), which is why 2026.8b28 / v2026.8 shipped with the crash latent.
+	local my_origin = GLOBAL.tonumber((GLOBAL.TheShard ~= nil and GLOBAL.TheShard:GetShardId()) or 0) or 0
 	for _, v in ipairs(_G.AllPlayers) do
 		local userid = v.userid
 		if userid ~= nil and userid ~= "" then
