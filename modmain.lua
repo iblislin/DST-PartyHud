@@ -59,7 +59,7 @@ local VERT_GAP  = -120 -- gap between badges (negative = each next one goes DOWN
                        -- name no longer overlaps the hunger/sanity sub-rings of the badge above)
 local VERT_GAP_COMPACT = -90 -- tighter gap for the HP-only (no sub-rings) badge; pre-sub-ring spacing
 local VERT_COL_W = 80  -- horizontal spacing when the column wraps to a new one (see compute_percol)
-local VERT_BOTTOM_RESERVE = 120 -- badge-local units kept clear at the bottom for the game's map(M)
+local VERT_BOTTOM_RESERVE = 150 -- badge-local units kept clear at the bottom for the game's map(M)
                                 -- button. FIXED (not per-row): the compact gap is tighter, so a
                                 -- per-row reserve would pack an extra badge into the button. Larger
                                 -- = wraps a column one badge sooner.
@@ -67,7 +67,7 @@ local VERT_BOTTOM_RESERVE_FREE = 40 -- bottom keep-out for columns 2+ (further L
                                     -- column): the game's Map(M) button only sits under the FIRST
                                     -- column, so later columns have a clear bottom and extend nearly to
                                     -- the screen edge (just this small margin). Smaller = reach further down.
-local MOISTURE_TOP_RESERVE = 80 -- badge-local units to push the FIRST column's top DOWN when the game's moisture (rain) meter is showing, so our column 0 doesn't cover it. Visually tuned.
+local MOISTURE_TOP_RESERVE = 75 -- badge-local units to push the FIRST column's top DOWN when the game's moisture (rain) meter is showing, so our column 0 doesn't cover it. Visually tuned.
 local moisture_active = false -- client-local: is the game's moisture (rain) meter currently popped up (owner moisture > 0)? When true, column 0 is pushed down to dodge it.
 
 --imports partybadge
