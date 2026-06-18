@@ -100,17 +100,4 @@ configuration_options=
 	default=0,
 	client = true,
 	},
-		{
-		name="low_hp_alert",
-		label="Low-HP Alert",
-		hover="Blink a red border on a teammate's badge when their HP drops below this level (percent of their max HP). Off disables it.",
-		options={
-				{description = "Off", data = 0},
-				{description = "40%", data = 40},
-				{description = "25%", data = 25},
-				{description = "15%", data = 15}
-			},
-		default=25,
-		client = true,
-		},
 }
