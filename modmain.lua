@@ -163,9 +163,20 @@ local function backpack_layout_mode()
 	local body = p.replica.inventory:GetEquippedItem(eslot)
 	local cont = (body ~= nil and body.replica ~= nil) and body.replica.container or nil
 	if cont == nil then return 0 end
-	-- Only an OPEN container shows its UI (right-click toggles open/close); a closed backpack shows
-	-- nothing -> no overlap -> no shift. Mirrors the game's own overflow:IsOpenedBy gate.
-	if cont.IsOpenedBy ~= nil and not cont:IsOpenedBy(p) then return 0 end
+	-- Only an OPEN container shows its UI (right-click toggles open/close); a closed backpack overlaps
+	-- nothing -> no shift. Detect "open" robustly: prefer the HUD's open-widget map
+	-- (HUD.controls.containers[body], set/cleared as the side widget opens/closes, playerhud.lua) -- on a
+	-- backpack SWAP while the old one is open, the NEW pack's replica IsOpenedBy lags (stays false though
+	-- its side widget is already shown), which used to drop the shift. Fall back to IsOpenedBy for the
+	-- integrated case (no side widget) and as a general backstop.
+	local open = false
+	local hud = p.HUD
+	if hud ~= nil and hud.controls ~= nil and hud.controls.containers ~= nil and hud.controls.containers[body] ~= nil then
+		open = true
+	elseif cont.IsOpenedBy ~= nil and cont:IsOpenedBy(p) then
+		open = true
+	end
+	if not open then return 0 end
 	local integrated = (_G.TheInput ~= nil and _G.TheInput:ControllerAttached())
 		or (_G.Profile ~= nil and _G.Profile.GetIntegratedBackpack ~= nil and _G.Profile:GetIntegratedBackpack())
 	return integrated and 2 or 1
