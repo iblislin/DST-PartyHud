@@ -44,6 +44,19 @@ Several gotchas below follow directly from 5.1 semantics:
   caves is NOT in your surface shard's `AllPlayers`. Showing cross-shard players requires
   syncing over the shard network (see the Global Positions mod, workshop 378160973), not reading
   `AllPlayers`.
+- **`TheShard:GetShardId()` returns a STRING, not a number.** `SHARDID = { INVALID = "0",
+  MASTER = "1" }` (`constants.lua`, string values; secondary shards get a numeric-looking string
+  id). The engine's own code stringifies the OTHER operand to compare (`tostring(sender) ~=
+  TheShard:GetShardId()`, networkclientrpc.lua) and `Shard_GetConnectedShards()` is keyed by these
+  STRING ids. So `world_id ~= tostring(GetShardId())` is the correct self-exclusion in a send loop.
+  The trap: if you stamp a shard id into a record/netvar as the raw `GetShardId()` (a string) and
+  later compare it `==` against a number (e.g. one that round-tripped through a numeric codec /
+  `tonumber`), `"1" == 1` is **false** and the comparison silently never matches. Pick ONE type at
+  a single chokepoint — coerce with `tonumber()` on the way in (or `tostring()` everywhere) — and
+  say which in a comment. A codec that `math.floor`s on encode + `tonumber`s on decode will mask
+  the bug (both ends become numbers), leaving a latent trap for the next refactor that compares
+  a pre-encode value. → dimension 4 + 6. (PartyHud v2026.8 hit exactly this: `origin` stamped as
+  the string `"1"`, rescued only by codec coercion.)
 
 ## 2. `player_classified` is owner-only
 - `player_common.lua` does `inst.player_classified.Network:SetClassifiedTarget(inst)` (~:1016).
@@ -67,6 +80,15 @@ Several gotchas below follow directly from 5.1 semantics:
   temperature reads as cheap insurance, and NEVER assume these exist on the client.)
 
 ## 4. Lifecycle events
+- **`TheNet:GetClientTable()` can return non-nil-but-EMPTY transiently** (e.g. mid-handshake), not
+  just `nil`. Any logic that treats it as the authoritative live roster and REMOVES things absent
+  from it (a reconcile / prune / "drop everyone not in the table" pass) must guard `clienttable ~=
+  nil AND #clienttable > 0` — a `~= nil`-only guard still lets an empty table wipe the whole set
+  for that tick (badges flicker out then back). The engine's own consumers guard `#t > 0` too
+  (playerhistory.lua). A read-only use (building a name lookup) is fine with just the nil-guard;
+  it's the destructive reconcile that needs the empty-guard. → dimension 2/6. (PartyHud v2026.8
+  shipped the comment "never reconcile against an empty set" but the code only nil-guarded — caught
+  by the audit.)
 - **Presence, server-only**: `ms_playerjoined` / `ms_playerleft` — `TheWorld:PushEvent(..., player)`
   inside `if TheWorld.ismastersim` (player_common.lua ~:853/:1195). Not visible to clients.
 - **Presence, client+server**: `playerentered` / `playerexited` — `TheWorld:PushEvent(..., player)`
@@ -160,6 +182,19 @@ Several gotchas below follow directly from 5.1 semantics:
 - **`table.sort` irreflexivity**: a self-first comparator without an `a==b` guard → potential
   "invalid order function". → dimension 3 + §8.
 - **Client-config not applied**: `GetModConfigData` without `get_local_config=true`. → §10.
+- **Shard-id string-vs-number (cross-shard, v2026.8)**: a per-record `origin` field stamped with the
+  raw `TheShard:GetShardId()` (a STRING, `"1"`) then compared `==` against a number that had
+  round-tripped through a numeric codec — `"1" == 1` is false. It happened to work only because the
+  codec floored/`tonumber`'d both ends; a latent trap for any future pre-encode compare. Fix:
+  `tonumber()` at the stamp chokepoint. → dimension 4 + §1.
+- **Empty (not nil) GetClientTable reconcile (v2026.8)**: a roster-reconcile that pruned every
+  foreign player absent from `GetClientTable()` guarded only `~= nil`, not `#t > 0`; a transient
+  empty roster would wipe all cross-shard badges for a tick. The code even carried a comment
+  promising the empty-set protection it didn't implement. → dimension 2 + §4.
+- **Client-side `TheShard:GetShardId()` unreliable (v2026.8)**: on a pure client the call did not
+  return the server shard's id (so a same-shard-far teammate got the cross-shard label). Fix: derive
+  "my shard" from the client's OWN record in the broadcast blob (the server stamps every local
+  player with this shard's origin) rather than trusting the client-side shard-id API. → dimension 2/6.
 
 ## 12. Testing layers (this audit is one of four gates)
 1. **luacheck** — load-time only (syntax / undefined & accidental globals). Cheap first gate.

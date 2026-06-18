@@ -791,11 +791,15 @@ end
 -- userid). Players with a nil/"" userid are skipped (they can't be keyed in the store).
 local function build_local_records()
 	local records = {}
-	-- This shard's numeric id, stamped onto every record we emit (codec v2 `origin` field). NUMBER
-	-- space (GetShardId() returns a number) -- distinct from the STRING keys of
-	-- Shard_GetConnectedShards() used by the send loop; do NOT tostring it. Receivers read this to
-	-- tell "same-shard-far" from "cross-shard"; falls back to 0 if TheShard isn't resolvable yet.
-	local my_origin = (GLOBAL.TheShard ~= nil and GLOBAL.TheShard:GetShardId()) or 0
+	-- This shard's id, stamped onto every record we emit (codec v2 `origin` field). NOTE:
+	-- TheShard:GetShardId() returns a STRING, not a number (SHARDID.MASTER == "1", constants.lua:2482)
+	-- -- which is why the send loop below tostring()s it to match Shard_GetConnectedShards()'s string
+	-- keys. Here we go the OTHER way and coerce to a NUMBER, so the in-memory origin type matches what
+	-- the client ultimately compares against: every origin the client sees has been through codec
+	-- encode->decode (math.floor on encode, tonumber on decode) and is therefore a number. Normalizing
+	-- here removes a latent "1" == 1 -> false trap if a future path ever compared a freshly-built
+	-- record's origin before re-encoding. Falls back to 0 if TheShard isn't resolvable yet.
+	local my_origin = tonumber((GLOBAL.TheShard ~= nil and GLOBAL.TheShard:GetShardId()) or 0) or 0
 	for _, v in ipairs(_G.AllPlayers) do
 		local userid = v.userid
 		if userid ~= nil and userid ~= "" then
@@ -892,7 +896,11 @@ AddSimPostInit(function()
 		--       reconcile against an empty set (that would wipe everything).
 		if GLOBAL.TheNet ~= nil and GLOBAL.TheNet.GetClientTable ~= nil then
 			local clienttable = GLOBAL.TheNet:GetClientTable()
-			if clienttable ~= nil then
+			-- Guard BOTH nil AND empty: GetClientTable() can transiently return {} (e.g. mid-handshake),
+			-- and reconcile against an empty live_set would wipe every foreign player for that tick
+			-- (the badges flicker out and back ~0.5s later). The engine's own consumers guard `#t > 0`
+			-- too (playerhistory.lua). expire() still runs independently, so a truly-gone peer is caught.
+			if clienttable ~= nil and #clienttable > 0 then
 				local live_set = {}
 				for _, c in ipairs(clienttable) do
 					if c.userid ~= nil and c.userid ~= "" then live_set[c.userid] = true end
