@@ -91,6 +91,19 @@ local phud_ypos
 -- real definition site. codec is required here too (require is memoised; the later require returns
 -- the same table) so UpdateBadges can unpack the flag int.
 local codec_client = _G.require "partyhud_statuscodec"
+-- Pure layout/dodge math lives in partyhud_layout (busted-tested, zero engine deps); modmain reads the
+-- live engine values and delegates the arithmetic. Named `layoutmath` to avoid the existing `layout`
+-- config-mode upvalue (line 45). Required here (before compute_percol/status_second_row/layout_badges
+-- below) since a Lua local declared later in the chunk is not an upvalue of an earlier-defined closure.
+local layoutmath = _G.require "partyhud_layout"
+-- crossshard helpers (the store + the pure merge / my-shard / same-shard fns) are used BOTH client-side
+-- in UpdateBadges (my_shard derivation + same-shard check) AND server-side (store + publish merge), so
+-- forward-require here. A local declared later (where the store lives) is NOT an upvalue of the earlier
+-- UpdateBadges closure -- it would resolve to a nil global and crash the foreign-render path.
+local crossshard = _G.require "partyhud_crossshard"
+-- pure status-display decisions (sanity rate arrow incl. the sleep special-case) -- forward-required
+-- since compute_sanity_ratescale below is a server hook defined before the server-side require block.
+local statuslogic = _G.require "partyhud_status"
 local get_client_foreign_records -- forward decl; assigned where the client store lives (see below)
 
 if positional==0 then -- standard with minimap
@@ -118,39 +131,20 @@ local function compute_percol(vy, bottom_reserve)
 	if GLOBAL.TheFrontEnd ~= nil and GLOBAL.TheFrontEnd.GetHUDScale ~= nil then
 		hudscale = GLOBAL.TheFrontEnd:GetHUDScale() or 1
 	end
-	if scrnh == nil or scrnh <= 0 or scrnw == nil or scrnw <= 0 or hudscale <= 0 then
-		if DEBUG_SHOWALL then
-			print("[PartyHud DEBUG] compute_percol fallback: scrnh="..tostring(scrnh).." hudscale="..tostring(hudscale))
-		end
-		return 6 -- safe fallback if the screen/HUD scale can't be read
+	if DEBUG_SHOWALL and (scrnh == nil or scrnh <= 0 or scrnw == nil or scrnw <= 0 or hudscale <= 0) then
+		print("[PartyHud DEBUG] compute_percol fallback: scrnh="..tostring(scrnh).." hudscale="..tostring(hudscale))
 	end
-	local STATUS_SCALE = 1.4               -- statusdisplays default scale (controls.lua:155)
-	-- topleft_root (parent of statusdisplays) is BOTH SCALEMODE_PROPORTIONAL and SetScale(hudscale)
-	-- (controls.lua:503/559). The engine's proportional factor scales the badge relative to the
-	-- 1280x720 reference (min of the width/height ratios), capped at MAX_HUD_SCALE=1.25 on upscale
-	-- (controls.lua:506 SetMaxPropUpscale). So a badge's PIXEL height = local * STATUS_SCALE *
-	-- hudscale * prop. We used to OMIT `prop`: on a sub-720 window prop<1 shrinks the real badges but
-	-- `usable` didn't follow, so the column collapsed to a single badge. Divide it out so `usable`
-	-- (screen height in badge-local units) tracks the real badge size -> per-column stays stable as
-	-- the window resizes (and grows correctly on >1080p screens up to the 1.25 cap).
-	local REF_W, REF_H, MAX_PROP = 1280, 720, 1.25 -- RESOLUTION_X / RESOLUTION_Y / MAX_HUD_SCALE (constants.lua)
-	local prop = math.min(scrnw / REF_W, scrnh / REF_H)
-	if prop > MAX_PROP then prop = MAX_PROP end
-	if prop <= 0 then prop = 1 end
-	local usable = scrnh / (hudscale * STATUS_SCALE * prop)
-	local vgap = show_substatus and VERT_GAP or VERT_GAP_COMPACT -- effective gap (tighter when sub-rings hidden)
-	local rowpitch = -vgap                 -- positive distance between rows
 	-- reserve a FIXED keep-out zone at the bottom for the game's map (M) button. It must be a
 	-- fixed absolute distance, NOT the row pitch: the compact (sub-gauges off) gap is tighter, so
 	-- a per-row reserve packs an extra badge into the button. Fixed keeps equal clearance in both modes.
 	bottom_reserve = bottom_reserve or VERT_BOTTOM_RESERVE -- default = full Map(M)-button keep-out (col 0); later columns pass a smaller value
-	-- last visible row: badge origin minus ~60 (its sub-ring bottom) must stay above the
-	-- reserved bottom zone.
-	local n = math.floor((vy - 60 + usable - bottom_reserve) / rowpitch) + 1
-	if n < 1 then n = 1 end
+	local vgap = show_substatus and VERT_GAP or VERT_GAP_COMPACT -- effective gap (tighter when sub-rings hidden)
+	-- The prop/usable/wrap arithmetic (incl. the invalid-screen PERCOL_FALLBACK=6 guard) lives in
+	-- partyhud_layout.percol_count -- behaviour-neutral extraction (busted-tested with zero engine deps).
+	local n = layoutmath.percol_count(scrnw, scrnh, hudscale, vy, bottom_reserve, vgap)
 	if DEBUG_SHOWALL then
-		print(string.format("[PartyHud DEBUG] scrnw=%.0f scrnh=%.0f hudscale=%.3f prop=%.3f usable=%.0f vy=%.0f gap=%.0f per_col=%d",
-			scrnw, scrnh, hudscale, prop, usable, vy, vgap, n))
+		print(string.format("[PartyHud DEBUG] scrnw=%s scrnh=%s hudscale=%s vy=%.0f gap=%.0f per_col=%d",
+			tostring(scrnw), tostring(scrnh), tostring(hudscale), vy, vgap, n))
 	end
 	return n
 end
@@ -195,18 +189,13 @@ end
 -- moisture meter y-115 / Abigail y-100, which the smaller MOISTURE_TOP_RESERVE covers).
 local function status_second_row(sd)
     if sd == nil then return 0, 0 end
-    local n, reserve = 0, 0
     local p = sd.owner
-    if p ~= nil and p.GetMoisture ~= nil and (p:GetMoisture() or 0) > 0 then
-        n = n + 1; if MOISTURE_TOP_RESERVE > reserve then reserve = MOISTURE_TOP_RESERVE end
-    end
-    if sd.pethealthbadge ~= nil then -- Abigail (y-100), shallower than moisture -> MOISTURE_TOP_RESERVE covers it
-        n = n + 1; if MOISTURE_TOP_RESERVE > reserve then reserve = MOISTURE_TOP_RESERVE end
-    end
-    if sd.inspirationbadge ~= nil then -- Wigfrid inspiration (y-130), the deepest -> needs more
-        n = n + 1; if INSPIRATION_TOP_RESERVE > reserve then reserve = INSPIRATION_TOP_RESERVE end
-    end
-    return (n > 2 and 2 or n), reserve
+    -- moisture meter (y-115) when wet; Abigail pet-health (y-100, shallower); Wigfrid inspiration
+    -- (y-130, deepest). The counting/reserve-max arithmetic is delegated to partyhud_layout
+    -- (behaviour-neutral extraction); modmain keeps the engine reads.
+    local moisture = (p ~= nil and p.GetMoisture ~= nil and (p:GetMoisture() or 0) > 0)
+    return layoutmath.second_row_span(moisture, sd.pethealthbadge ~= nil, sd.inspirationbadge ~= nil,
+        MOISTURE_TOP_RESERVE, INSPIRATION_TOP_RESERVE)
 end
 
 -- Position every badge. Vertical layout wraps into columns sized by the live screen height.
@@ -251,14 +240,13 @@ local function layout_badges(badgearray)
 	-- the WIDE case (rain + Abigail/inspiration DISPLACES the moisture meter left) still lands one badge
 	-- under the shifted col 0 -> dodge just col 0 there (col 1 has moved left, now clear -- no gap).
 	-- Outside Mode A the band covers `second_row_cols` (0/1/2) columns directly.
-	local dodge_cols = (bpmode == 1) and ((second_row_cols >= 2) and 1 or 0) or second_row_cols
+	local dodge_cols = layoutmath.dodge_cols(bpmode, second_row_cols)
 	-- Fill top-to-bottom, wrapping LEFTWARD (right-anchored list). compute_percol always returns >=1 so
 	-- col advances and i grows each pass; `col <= n` is a belt-and-suspenders bound on the loop.
 	local n = #badgearray
 	local i, col = 1, 0
 	while i <= n and col <= n do
-		local top    = (col < dodge_cols) and (vstarty - second_row_reserve) or vstarty
-		local bottom = (col == 0 and bpmode ~= 1) and VERT_BOTTOM_RESERVE or free
+		local top, bottom = layoutmath.column_reserve(col, dodge_cols, bpmode, vstarty, second_row_reserve, VERT_BOTTOM_RESERVE, free)
 		local cap = compute_percol(top, bottom)
 		for row = 0, cap - 1 do
 			if i > n then break end
@@ -483,15 +471,8 @@ local function onstatusdisplaysconstruct(self)
 			-- local player -- INCLUDING ThePlayer -- with this shard's origin, so ThePlayer's record origin
 			-- IS my shard id. nil until the first blob carrying ThePlayer arrives (-> records fall to the
 			-- cross-shard label for that brief window, self-correcting on the next refresh).
-			local my_shard = nil
-			if _G.ThePlayer ~= nil and _G.ThePlayer.userid ~= nil then
-				for _, r in ipairs(get_client_foreign_records()) do
-					if r.userid == _G.ThePlayer.userid and r.origin ~= nil then
-						my_shard = r.origin
-						break
-					end
-				end
-			end
+			local my_shard = crossshard.my_shard_from_records(get_client_foreign_records(),
+				_G.ThePlayer ~= nil and _G.ThePlayer.userid or nil)
 
 			local slot = next_slot
 			for _, rec in ipairs(get_client_foreign_records()) do
@@ -507,7 +488,7 @@ local function onstatusdisplaysconstruct(self)
 					local flags = codec_client.unpackflags(rec.flags)
 					-- origin nil/0 (a v1 peer, or unresolved shard) -> same_shard false -> cross-shard
 					-- label, preserving pre-v2 behaviour.
-					local same_shard = (my_shard ~= nil and rec.origin ~= nil and rec.origin == my_shard)
+					local same_shard = crossshard.is_same_shard(rec.origin, my_shard)
 					if same_shard then
 						b:SetForeign(true, nil, true)        -- same-shard out-of-view -> dimmed + "far"
 					else
@@ -583,24 +564,12 @@ end
 local function compute_sanity_ratescale(inst)
 	local sanity = inst.components.sanity
 	if sanity == nil then return GLOBAL.RATE_SCALE.NEUTRAL end
-	if inst:HasTag("sleeping") then
-		if sanity:GetPercentWithPenalty() < 1 then
-			local rate = GLOBAL.TUNING.SLEEP_SANITY_PER_TICK / GLOBAL.TUNING.SLEEP_TICK_PERIOD
-			return (rate > .2 and GLOBAL.RATE_SCALE.INCREASE_HIGH)
-				or (rate > .1 and GLOBAL.RATE_SCALE.INCREASE_MED)
-				or (rate > .01 and GLOBAL.RATE_SCALE.INCREASE_LOW)
-				or GLOBAL.RATE_SCALE.NEUTRAL
-		end
-		return GLOBAL.RATE_SCALE.NEUTRAL
-	end
-	local rs = sanity:GetRateScale()
-	local pct = sanity:GetPercentWithPenalty()
-	if rs == GLOBAL.RATE_SCALE.INCREASE_HIGH or rs == GLOBAL.RATE_SCALE.INCREASE_MED or rs == GLOBAL.RATE_SCALE.INCREASE_LOW then
-		return (pct < 1) and rs or GLOBAL.RATE_SCALE.NEUTRAL
-	elseif rs == GLOBAL.RATE_SCALE.DECREASE_HIGH or rs == GLOBAL.RATE_SCALE.DECREASE_MED or rs == GLOBAL.RATE_SCALE.DECREASE_LOW then
-		return (pct > 0) and rs or GLOBAL.RATE_SCALE.NEUTRAL
-	end
-	return GLOBAL.RATE_SCALE.NEUTRAL
+	-- the rate-arrow decision (sleep special-case + the no-rise-at-full / no-fall-at-empty clamps,
+	-- mirroring sanitybadge.lua) is extracted to statuslogic.sanity_ratescale for busted testing.
+	-- GetRateScale() reads NEUTRAL while sleeping, so the pure fn ignores it in the sleep branch.
+	local sleep_rate = GLOBAL.TUNING.SLEEP_SANITY_PER_TICK / GLOBAL.TUNING.SLEEP_TICK_PERIOD
+	return statuslogic.sanity_ratescale(inst:HasTag("sleeping"), sleep_rate,
+		sanity:GetRateScale(), sanity:GetPercentWithPenalty(), GLOBAL.RATE_SCALE)
 end
 
 local function onsanitydelta(inst, data)
@@ -755,7 +724,8 @@ AddPlayerPostInit(customhppostinit)
 -- task, never inside the handler.
 -- ============================================================================================
 local codec = _G.require "partyhud_statuscodec"
-local crossshard = _G.require "partyhud_crossshard"
+-- crossshard is forward-required up top (UpdateBadges uses it client-side); require is memoised so it's
+-- the same table here.
 
 -- DEBUG: print a sentinel on every send + receive so the round-trip is visible in the shard logs.
 -- Default true for T3 verification; flipped to false (or wired to a config) in a later task.
@@ -929,19 +899,8 @@ AddSimPostInit(function()
 			-- build_local_records() result already computed earlier this tick for the outbound RPC --
 			-- REUSE it (do NOT rebuild). userid-deduped, LOCAL wins over a foreign copy of the same user
 			-- (e.g. a player mid-migration briefly present in both sets).
-			local merged, seen = {}, {}
-			for _, r in ipairs(records) do            -- this shard's own players (server-complete AllPlayers)
-				if r.userid ~= nil and r.userid ~= "" and not seen[r.userid] then
-					seen[r.userid] = true
-					merged[#merged + 1] = r
-				end
-			end
-			for _, r in ipairs(foreign) do            -- other shards' players
-				if r.userid ~= nil and not seen[r.userid] then
-					seen[r.userid] = true
-					merged[#merged + 1] = r
-				end
-			end
+			-- userid-deduped merge, LOCAL wins (extracted to crossshard.merge_local_foreign for testing).
+			local merged = crossshard.merge_local_foreign(records, foreign)
 			GLOBAL.TheWorld.net.partyhud_foreignblob:set(codec.encode(merged))
 			if DEBUG_XSHARD then
 				print("[PartyHud] [XSHARD] published " .. #merged .. " records to carrier (" .. #foreign .. " foreign)")

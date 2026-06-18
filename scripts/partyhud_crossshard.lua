@@ -145,4 +145,46 @@ function M.reconcile(store, live_userids)
     return removed
 end
 
+-- v2026.11 (extracted for test): merge this shard's own player records with the foreign (other-shard)
+-- records into one userid-deduped array. LOCAL wins -- a player briefly present in both sets (mid
+-- shard-migration) appears once, as the local copy. Skips nil/"" userids in the local set and nil
+-- userids in the foreign set (matching the publish-time guards).
+function M.merge_local_foreign(local_records, foreign_records)
+    local merged, seen = {}, {}
+    for _, r in ipairs(local_records or {}) do
+        if r.userid ~= nil and r.userid ~= "" and not seen[r.userid] then
+            seen[r.userid] = true
+            merged[#merged + 1] = r
+        end
+    end
+    for _, r in ipairs(foreign_records or {}) do
+        if r.userid ~= nil and not seen[r.userid] then
+            seen[r.userid] = true
+            merged[#merged + 1] = r
+        end
+    end
+    return merged
+end
+
+-- v2026.11 (extracted for test): this client's own shard id, read from ITS OWN record in the broadcast
+-- blob (the server stamps every local player -- incl. ThePlayer -- with this shard's origin). Returns
+-- the origin number, or nil if my_userid is nil or no matching record with an origin is present yet.
+-- (TheShard:GetShardId() is unreliable on a pure client -- see the v2026.8/.9 notes -- so we derive it.)
+function M.my_shard_from_records(records, my_userid)
+    if my_userid == nil then return nil end
+    for _, r in ipairs(records or {}) do
+        if r.userid == my_userid and r.origin ~= nil then
+            return r.origin
+        end
+    end
+    return nil
+end
+
+-- v2026.11 (extracted for test): is a foreign record on the SAME shard as this client? True only when
+-- both the record's origin and my_shard are known and equal -> "far" (same-shard out-of-view);
+-- otherwise (nil origin from a v1 peer, or unknown my_shard) treat as cross-shard ("Caves"/"Surface").
+function M.is_same_shard(rec_origin, my_shard)
+    return (my_shard ~= nil and rec_origin ~= nil and rec_origin == my_shard)
+end
+
 return M

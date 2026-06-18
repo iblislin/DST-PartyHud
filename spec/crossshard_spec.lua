@@ -305,4 +305,156 @@ describe("partyhud crossshard store", function()
         end)
     end)
 
+    -- ------------------------------------------------------------------
+    describe("merge_local_foreign", function()
+        it("local-only set passes through unchanged", function()
+            local got = store.merge_local_foreign(
+                { { userid = "A", hp = 1 }, { userid = "B", hp = 2 } }, {})
+            assert.are.same(
+                { { userid = "A", hp = 1 }, { userid = "B", hp = 2 } }, got)
+        end)
+
+        it("foreign-only set passes through unchanged", function()
+            local got = store.merge_local_foreign(
+                {}, { { userid = "X", hp = 7 }, { userid = "Y", hp = 8 } })
+            assert.are.same(
+                { { userid = "X", hp = 7 }, { userid = "Y", hp = 8 } }, got)
+        end)
+
+        it("a userid in BOTH keeps the LOCAL copy", function()
+            local local_recs   = { { userid = "DUP", hp = 111 } }
+            local foreign_recs = { { userid = "DUP", hp = 222 } }
+            local got = store.merge_local_foreign(local_recs, foreign_recs)
+            assert.are.equal(1, #got)
+            assert.are.equal(111, got[1].hp) -- local hp survived, not the foreign 222
+        end)
+
+        it("dedups within the local set (same userid twice -> once)", function()
+            local got = store.merge_local_foreign(
+                { { userid = "A", hp = 1 }, { userid = "A", hp = 9 } }, {})
+            assert.are.equal(1, #got)
+            assert.are.equal(1, got[1].hp) -- first occurrence wins
+        end)
+
+        it("skips a nil userid in the local set", function()
+            local got = store.merge_local_foreign(
+                { { userid = nil, hp = 1 }, { userid = "B", hp = 2 } }, {})
+            assert.are.equal(1, #got)
+            assert.are.equal("B", got[1].userid)
+        end)
+
+        it('skips an "" (empty-string) userid in the local set', function()
+            local got = store.merge_local_foreign(
+                { { userid = "", hp = 1 }, { userid = "B", hp = 2 } }, {})
+            assert.are.equal(1, #got)
+            assert.are.equal("B", got[1].userid)
+        end)
+
+        it("skips a nil userid in the foreign set", function()
+            local got = store.merge_local_foreign(
+                {}, { { userid = nil, hp = 1 }, { userid = "Y", hp = 2 } })
+            assert.are.equal(1, #got)
+            assert.are.equal("Y", got[1].userid)
+        end)
+
+        it("empty both -> {}", function()
+            assert.are.same({}, store.merge_local_foreign({}, {}))
+        end)
+
+        it("nil both -> {}", function()
+            assert.are.same({}, store.merge_local_foreign(nil, nil))
+        end)
+
+        it("ORDER is all locals (input order) then un-seen foreign", function()
+            local local_recs = {
+                { userid = "L1", hp = 1 },
+                { userid = "L2", hp = 2 },
+            }
+            local foreign_recs = {
+                { userid = "L1", hp = 99 }, -- already seen (local) -> dropped
+                { userid = "F1", hp = 3 },
+                { userid = "F2", hp = 4 },
+            }
+            local got = store.merge_local_foreign(local_recs, foreign_recs)
+            assert.are.equal(4, #got)
+            assert.are.equal("L1", got[1].userid)
+            assert.are.equal("L2", got[2].userid)
+            assert.are.equal("F1", got[3].userid)
+            assert.are.equal("F2", got[4].userid)
+            assert.are.equal(1, got[1].hp) -- L1 kept the local copy
+        end)
+    end)
+
+    -- ------------------------------------------------------------------
+    describe("my_shard_from_records", function()
+        it("returns the origin of the record whose userid == my_userid", function()
+            local recs = {
+                { userid = "A", origin = 1 },
+                { userid = "ME", origin = 2 },
+                { userid = "B", origin = 3 },
+            }
+            assert.are.equal(2, store.my_shard_from_records(recs, "ME"))
+        end)
+
+        it("returns nil when my_userid is nil", function()
+            local recs = { { userid = "ME", origin = 2 } }
+            assert.is_nil(store.my_shard_from_records(recs, nil))
+        end)
+
+        it("returns nil when no record matches my_userid", function()
+            local recs = { { userid = "A", origin = 1 }, { userid = "B", origin = 2 } }
+            assert.is_nil(store.my_shard_from_records(recs, "ME"))
+        end)
+
+        it("returns nil when the matching record has origin == nil", function()
+            local recs = { { userid = "ME", origin = nil } }
+            assert.is_nil(store.my_shard_from_records(recs, "ME"))
+        end)
+
+        it("first matching record with an origin wins if duplicates", function()
+            local recs = {
+                { userid = "ME", origin = 5 },
+                { userid = "ME", origin = 6 },
+            }
+            assert.are.equal(5, store.my_shard_from_records(recs, "ME"))
+        end)
+
+        it("works with a large numeric origin", function()
+            local recs = { { userid = "ME", origin = 338108181 } }
+            assert.are.equal(338108181, store.my_shard_from_records(recs, "ME"))
+        end)
+
+        it("nil/empty records -> nil", function()
+            assert.is_nil(store.my_shard_from_records(nil, "ME"))
+            assert.is_nil(store.my_shard_from_records({}, "ME"))
+        end)
+    end)
+
+    -- ------------------------------------------------------------------
+    describe("is_same_shard", function()
+        it("(1, 1) -> true", function()
+            assert.is_true(store.is_same_shard(1, 1))
+        end)
+
+        it("(2, 1) -> false", function()
+            assert.is_false(store.is_same_shard(2, 1))
+        end)
+
+        it("(nil, 1) -> false", function()
+            assert.is_false(store.is_same_shard(nil, 1))
+        end)
+
+        it("(1, nil) -> false", function()
+            assert.is_false(store.is_same_shard(1, nil))
+        end)
+
+        it("(nil, nil) -> false", function()
+            assert.is_false(store.is_same_shard(nil, nil))
+        end)
+
+        it("large equal numbers (338108181, 338108181) -> true", function()
+            assert.is_true(store.is_same_shard(338108181, 338108181))
+        end)
+    end)
+
 end)
