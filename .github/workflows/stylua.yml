@@ -1,0 +1,21 @@
+name: stylua
+on:
+  push:
+  pull_request:
+jobs:
+  stylua:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install StyLua (pinned)
+        # Pin to the same version + asset used locally so CI and local never disagree.
+        # ubuntu-latest is glibc, so the non-musl x86_64 build is correct here.
+        run: |
+          set -euo pipefail
+          VERSION="v2.5.2"
+          ASSET="stylua-linux-x86_64.zip"
+          curl -fsSL -o /tmp/stylua.zip "https://github.com/JohnnyMorganz/StyLua/releases/download/${VERSION}/${ASSET}"
+          unzip -o /tmp/stylua.zip stylua -d /tmp
+          chmod +x /tmp/stylua
+      - name: Check formatting
+        run: /tmp/stylua --check .

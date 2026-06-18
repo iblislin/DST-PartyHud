@@ -130,7 +130,9 @@ fi
 known_exclude=(
   spec docs .claude .github tools README.md FEATURE-IDEAS.md preview.jpg
   .busted .luacheckrc .gitignore .git
-  release-manifest.txt   # the manifest itself is release/CI infra, not shipped content
+  release-manifest.txt     # the manifest itself is release/CI infra, not shipped content
+  .stylua.toml             # StyLua formatter config — dev tooling, not shipped
+  .git-blame-ignore-revs   # git blame hint for the StyLua baseline reformat — dev tooling
 )
 
 is_known_exclude() {

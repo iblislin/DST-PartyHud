@@ -46,13 +46,16 @@ bash tools/check-manifest.sh   # run from the repo root
 
 ## 2. Static gates
 
-Both must be green. These run on the **source tree**, so they prove code correctness but say nothing
-about what's in the archive (that's gate 1's job).
+All three must be green. These run on the **source tree**, so they prove code correctness + style but
+say nothing about what's in the archive (that's gate 1's job).
 
 - **luacheck — 0 warnings / 0 errors.** Locally `luacheck .` (or the hub luacheck docker image).
   CI: `.github/workflows/luacheck.yml`.
 - **busted — green.** CI runs real busted (`.github/workflows/busted.yml`). Locally there is no
   luarocks, so run the shim: `luajit spec/run_local.lua`.
+- **StyLua — formatted (`stylua --check .` exits 0).** CI: `.github/workflows/stylua.yml` (a blocking
+  check, pinned StyLua version). If it fails, run `stylua .` to auto-format then re-review the diff.
+  Config: `.stylua.toml` (2-space, Lua 5.1).
 
 ## 3. Crash-safety audit
 

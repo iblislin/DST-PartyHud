@@ -1,0 +1,6 @@
+# Revisions to skip in `git blame` (large mechanical reformats, no logic change).
+# Enable locally with:  git config blame.ignoreRevsFile .git-blame-ignore-revs
+# GitHub's blame view honours this file automatically.
+
+# style: adopt StyLua and apply the 2-space baseline reformat
+b6402d6fa348b4cbc5e3d06e2d216335fa5f5139
