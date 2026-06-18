@@ -260,7 +260,10 @@ end
 --                    arrows so a stale arrow from a previous LOCAL use of this slot can't linger.
 -- isforeign=false -> restore full opacity and hide the label (the slot is being re-used for a local
 --                    player or cleared). Cheap + idempotent: safe to call every refresh.
-function PartyBadge:SetForeign(isforeign, label)
+-- sameshard=true  -> this teammate is on the SAME shard but out of network view-range (not cross-shard);
+--                    override the label to read "far" instead of a shard name. nil/false for the
+--                    cross-shard case, so existing 2-arg callers keep their "Caves"/"Surface" label.
+function PartyBadge:SetForeign(isforeign, label, sameshard)
     self.foreign = isforeign and true or false
     local a = self.foreign and FOREIGN_ALPHA or FULL_ALPHA
 
@@ -302,7 +305,7 @@ function PartyBadge:SetForeign(isforeign, label)
             self.foreignlabel:SetPosition(0, 50, 0)
             self.foreignlabel:SetColour(0.7, 0.85, 1, 1) -- soft blue marker, fully opaque (it IS the "elsewhere" cue)
         end
-        self.foreignlabel:SetString(label or "elsewhere")
+        self.foreignlabel:SetString(sameshard and "far" or (label or "elsewhere"))
         self.foreignlabel:Show()
     elseif self.foreignlabel ~= nil then
         self.foreignlabel:Hide()

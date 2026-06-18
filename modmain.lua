@@ -471,6 +471,10 @@ local function onstatusdisplaysconstruct(self)
 			-- This client's shard determines the label for the foreign one (2-shard cluster): if we
 			-- are in the Caves the others are on the Surface, and vice versa.
 			local foreign_label = (_G.TheWorld ~= nil and _G.TheWorld:HasTag("cave")) and "Surface" or "Caves"
+			-- this client's own shard id (NUMBER, matching the codec v2 `origin` field). A foreign
+			-- record whose origin == my_shard is a SAME-shard teammate that fell out of network
+			-- view-range -- rendered "far" rather than with the cross-shard label below.
+			local my_shard = (_G.TheShard ~= nil and _G.TheShard:GetShardId()) or nil
 
 			local slot = next_slot
 			for _, rec in ipairs(get_client_foreign_records()) do
@@ -484,7 +488,14 @@ local function onstatusdisplaysconstruct(self)
 					local hungermax = 100
 					local sanitymax = (rec.sanity_max ~= nil and rec.sanity_max > 0) and rec.sanity_max or 100
 					local flags = codec_client.unpackflags(rec.flags)
-					b:SetForeign(true, foreign_label)
+					-- origin nil/0 (a v1 peer, or unresolved shard) -> same_shard false -> cross-shard
+					-- label, preserving pre-v2 behaviour.
+					local same_shard = (my_shard ~= nil and rec.origin ~= nil and rec.origin == my_shard)
+					if same_shard then
+						b:SetForeign(true, nil, true)        -- same-shard out-of-view -> dimmed + "far"
+					else
+						b:SetForeign(true, foreign_label)    -- cross-shard -> "Caves"/"Surface"
+					end
 					b:SetName(namebyuserid[rec.userid] or "?")
 					b:SetPercent(rec.hp_cur or 0, rec.hp_max, (rec.hp_penalty or 0) / 100)
 					-- SIMPLIFIED status: hunger/sanity + penalty shown, but NO live thermal pulse for far
@@ -765,6 +776,11 @@ end
 -- userid). Players with a nil/"" userid are skipped (they can't be keyed in the store).
 local function build_local_records()
 	local records = {}
+	-- This shard's numeric id, stamped onto every record we emit (codec v2 `origin` field). NUMBER
+	-- space (GetShardId() returns a number) -- distinct from the STRING keys of
+	-- Shard_GetConnectedShards() used by the send loop; do NOT tostring it. Receivers read this to
+	-- tell "same-shard-far" from "cross-shard"; falls back to 0 if TheShard isn't resolvable yet.
+	local my_origin = (GLOBAL.TheShard ~= nil and GLOBAL.TheShard:GetShardId()) or 0
 	for _, v in ipairs(_G.AllPlayers) do
 		local userid = v.userid
 		if userid ~= nil and userid ~= "" then
@@ -786,6 +802,7 @@ local function build_local_records()
 				sanity_max     = (v.customsanitymax ~= nil and v.customsanitymax:value()) or 0,
 				sanity_penalty = (v.customsanitydebuff ~= nil and v.customsanitydebuff:value()) or 0,
 				flags          = flags,
+				origin         = my_origin,
 			}
 		end
 	end
@@ -807,6 +824,12 @@ GLOBAL.AddShardModRPCHandler(XSHARD_RPC_NAMESPACE, XSHARD_RPC_NAME, function(sen
 		print("[PartyHud] [XSHARD] dropped malformed payload from shard "
 			.. tostring(sender_shard_id) .. ": " .. tostring(records))
 		return
+	end
+	-- DEFENSIVE BACKFILL for a v1 peer mid-upgrade: v1 records decode with origin == nil. The sender
+	-- is the shard those records came from, so stamp its id (numeric -- the handler's first arg) as
+	-- their origin. A v2 sender already carries origin, so this is a no-op for the steady state.
+	for _, rec in ipairs(records) do
+		if rec.origin == nil then rec.origin = sender_shard_id end
 	end
 	crossshard.upsert(foreign_store, records, GLOBAL.GetTime())
 	if DEBUG_XSHARD then
@@ -871,9 +894,28 @@ AddSimPostInit(function()
 		-- anyway so an unexpected ordering can never nil-index here.
 		if GLOBAL.TheWorld.net ~= nil and GLOBAL.TheWorld.net.partyhud_foreignblob ~= nil then
 			local foreign = crossshard.active(foreign_store)
-			GLOBAL.TheWorld.net.partyhud_foreignblob:set(codec.encode(foreign))
+			-- v2026.8 SAME-SHARD-FAR FIX: also merge THIS shard's own players (server's AllPlayers is
+			-- shard-complete, unlike a client's view-range-limited AllPlayers) so a same-shard teammate
+			-- out of network view-range still reaches every client via the carrier. `records` is the
+			-- build_local_records() result already computed earlier this tick for the outbound RPC --
+			-- REUSE it (do NOT rebuild). userid-deduped, LOCAL wins over a foreign copy of the same user
+			-- (e.g. a player mid-migration briefly present in both sets).
+			local merged, seen = {}, {}
+			for _, r in ipairs(records) do            -- this shard's own players (server-complete AllPlayers)
+				if r.userid ~= nil and r.userid ~= "" and not seen[r.userid] then
+					seen[r.userid] = true
+					merged[#merged + 1] = r
+				end
+			end
+			for _, r in ipairs(foreign) do            -- other shards' players
+				if r.userid ~= nil and not seen[r.userid] then
+					seen[r.userid] = true
+					merged[#merged + 1] = r
+				end
+			end
+			GLOBAL.TheWorld.net.partyhud_foreignblob:set(codec.encode(merged))
 			if DEBUG_XSHARD then
-				print("[PartyHud] [XSHARD] published " .. #foreign .. " foreign records to carrier")
+				print("[PartyHud] [XSHARD] published " .. #merged .. " records to carrier (" .. #foreign .. " foreign)")
 			end
 		end
 	end)

@@ -19,6 +19,9 @@ local function sample(n)
 			sanity_max     = 200,
 			sanity_penalty = (i % 3 == 0) and 50 or 0,
 			flags          = 0,
+			-- origin (numeric shard id) is part of the v2 wire format (the current default
+			-- PROTOCOL_VERSION), so the default-version round-trip preserves it exactly.
+			origin         = (i % 2 == 0) and 2 or 1,
 		}
 	end
 	return recs
@@ -56,7 +59,8 @@ describe("partyhud status codec", function()
 		it("preserves extreme numeric values (WX-78 400 HP, 75% penalty)", function()
 			local recs = { {
 				userid = "KU_wx78", hp_cur = 400, hp_max = 400, hp_penalty = 75,
-				hunger = 150, sanity_cur = 0, sanity_max = 200, sanity_penalty = 95, flags = 0,
+				hunger = 150, sanity_cur = 0, sanity_max = 200, sanity_penalty = 95,
+				flags = 0, origin = 1,
 			} }
 			local _, out = codec.decode(codec.encode(recs))
 			assert.are.same(recs, out)
@@ -66,12 +70,12 @@ describe("partyhud status codec", function()
 	describe("protocol version byte", function()
 		it("prefixes the encoded payload with the version", function()
 			local s = codec.encode(sample(2))
-			assert.are.equal("1|", s:sub(1, 2))
+			assert.are.equal("2|", s:sub(1, 2))
 		end)
 
 		it("rejects an unsupported version", function()
 			local s = codec.encode(sample(1))
-			local bumped = s:gsub("^1|", "9|")
+			local bumped = s:gsub("^2|", "9|")
 			local ver, err = codec.decode(bumped)
 			assert.is_nil(ver)
 			assert.is_truthy(err:find("unsupported protocol version"))
@@ -140,6 +144,93 @@ describe("partyhud status codec", function()
 					hunger = 0, sanity_cur = 0, sanity_max = 0, sanity_penalty = 0, flags = 0,
 				} })
 			end)
+		end)
+	end)
+
+	describe("protocol v2 origin field", function()
+		it("defaults to version 2", function()
+			assert.are.equal(2, codec.PROTOCOL_VERSION)
+			local s = codec.encode(sample(1))
+			assert.are.equal("2|", s:sub(1, 2))
+		end)
+
+		it("round-trips origin on the default (v2) version", function()
+			local recs = { {
+				userid = "KU_caves", hp_cur = 90, hp_max = 150, hp_penalty = 0,
+				hunger = 75, sanity_cur = 110, sanity_max = 200, sanity_penalty = 0,
+				flags = 0, origin = 7,
+			} }
+			local ver, out = codec.decode(codec.encode(recs))
+			assert.are.equal(2, ver)
+			assert.are.equal(7, out[1].origin)
+			assert.are.same(recs, out)
+		end)
+
+		it("origin defaults to 0 when omitted from a v2 record", function()
+			-- explicitly omit origin (sample() now sets it, so hand-build here)
+			local recs = { {
+				userid = "KU_noorigin", hp_cur = 100, hp_max = 150, hp_penalty = 0,
+				hunger = 80, sanity_cur = 120, sanity_max = 200, sanity_penalty = 0, flags = 0,
+			} }
+			local _, out = codec.decode(codec.encode(recs))
+			assert.are.equal(0, out[1].origin)
+		end)
+
+		it("round-trips a representative mixed record set with distinct origins", function()
+			local recs = {
+				{ userid = "KU_master", hp_cur = 100, hp_max = 150, hp_penalty = 0,
+				  hunger = 80, sanity_cur = 120, sanity_max = 200, sanity_penalty = 0,
+				  flags = codec.packflags({ fire = true }), origin = 1 },
+				{ userid = "KU_caves", hp_cur = 50, hp_max = 100, hp_penalty = 50,
+				  hunger = 10, sanity_cur = 0, sanity_max = 200, sanity_penalty = 95,
+				  flags = codec.packflags({ ghost = true, dead = true }), origin = 2 },
+				{ userid = "KU_wx", hp_cur = 400, hp_max = 400, hp_penalty = 0,
+				  hunger = 150, sanity_cur = 200, sanity_max = 200, sanity_penalty = 0,
+				  flags = 0, origin = 0 },
+			}
+			local ver, out = codec.decode(codec.encode(recs))
+			assert.are.equal(2, ver)
+			assert.are.same(recs, out)
+			assert.are.equal(1, out[1].origin)
+			assert.are.equal(2, out[2].origin)
+			assert.are.equal(0, out[3].origin)
+		end)
+
+		it("decodes a v1 payload with origin absent (nil)", function()
+			-- encode with an explicit version 1 -> 9 fields, origin is NOT emitted even though
+			-- the sample records carry one. The v1 wire format has no slot for it.
+			local recs = sample(2)
+			local v1str = codec.encode(recs, 1)
+			assert.are.equal("1|", v1str:sub(1, 2))
+			local ver, out = codec.decode(v1str)
+			assert.are.equal(1, ver)
+			assert.is_nil(out[1].origin)
+			assert.is_nil(out[2].origin)
+			-- every non-origin field round-trips exactly; origin is intentionally dropped by v1.
+			for i = 1, #recs do
+				local expected = {}
+				for k, v in pairs(recs[i]) do
+					if k ~= "origin" then expected[k] = v end
+				end
+				assert.are.same(expected, out[i])
+			end
+		end)
+
+		it("decodes a hand-written v1 string with origin absent", function()
+			local ver, out = codec.decode("1|1|KU_x:1:2:3:4:5:6:7:8")
+			assert.are.equal(1, ver)
+			assert.are.equal("KU_x", out[1].userid)
+			assert.are.equal(1, out[1].hp_cur)
+			assert.are.equal(8, out[1].flags)
+			assert.is_nil(out[1].origin)
+		end)
+
+		it("rejects a v2 record missing the origin field (9 fields, expected 10)", function()
+			assert.is_nil((codec.decode("2|1|KU_x:1:2:3:4:5:6:7:8")))
+		end)
+
+		it("rejects a non-numeric origin in a v2 record", function()
+			assert.is_nil((codec.decode("2|1|KU_x:1:2:3:4:5:6:7:8:abc")))
 		end)
 	end)
 end)

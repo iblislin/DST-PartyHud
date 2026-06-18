@@ -11,19 +11,25 @@
 --
 --   <version>|<count>|<rec>|<rec>|...
 --
--- where each <rec> is 9 fields joined by ":" --
---   userid:hp_cur:hp_max:hp_penalty:hunger:sanity_cur:sanity_max:sanity_penalty:flags
+-- where each <rec> is a version-dependent number of fields joined by ":" --
+--   v1 (9 fields): userid:hp_cur:hp_max:hp_penalty:hunger:sanity_cur:sanity_max:sanity_penalty:flags
+--   v2 (10 fields): ...:flags:origin   (origin = the numeric shard id the record came from)
+--
+-- The per-record field count is therefore version-aware: v1 = 9, v2 = 10. v2 appends a single
+-- numeric `origin` field after `flags`; a v1 payload simply has no origin (decoded records omit
+-- the key, leaving it nil). origin is NUMERIC and is never stringified.
 --
 -- Separators ("|" and ":") are safe because DST userids are "KU_" + base64-ish [A-Za-z0-9_-] and
 -- never contain them (decode still validates and rejects a userid carrying a separator).
 --
 -- The leading version byte lets a receiver drop payloads it doesn't understand (version skew when
 -- one shard hot-reloads a newer build) and gives a no-break upgrade path to a binary format later.
+-- Both v1 and v2 payloads are accepted on decode for backward compatibility.
 
 local M = {}
 
-M.PROTOCOL_VERSION = 1
-local SUPPORTED = { [1] = true }
+M.PROTOCOL_VERSION = 2
+local SUPPORTED = { [1] = true, [2] = true }
 
 -- status flag bits (a single 0..255 integer field)
 M.FLAGS = {
@@ -57,11 +63,13 @@ end
 
 local FIELD_SEP  = ":"
 local REC_SEP    = "|"
-local NUM_FIELDS = 9 -- userid + 8 numerics
+local NUM_FIELDS = 9 -- v1 baseline: userid + 8 numerics (v2 = NUM_FIELDS + 1, adds origin)
 
 -- encode(records [, version]) -> string
 -- records: array of { userid=string, hp_cur, hp_max, hp_penalty, hunger,
---                     sanity_cur, sanity_max, sanity_penalty, flags } (8 small ints + userid)
+--                     sanity_cur, sanity_max, sanity_penalty, flags [, origin] }
+--   8 small ints + userid for v1; v2 additionally emits the numeric `origin` (shard id).
+-- version defaults to M.PROTOCOL_VERSION; the field count emitted matches the version (v1=9, v2=10).
 function M.encode(records, version)
 	version = version or M.PROTOCOL_VERSION
 	-- The count header MUST match the records the body actually emits. ipairs (correctly) stops at
@@ -76,7 +84,8 @@ function M.encode(records, version)
 		assert(not uid:find(FIELD_SEP, 1, true) and not uid:find(REC_SEP, 1, true),
 			"userid contains a reserved separator: " .. uid)
 		count = count + 1
-		parts[#parts + 1] = table.concat({
+		-- The field count emitted MUST match the version: v1 = 9 fields, v2 = 10 (appends origin).
+		local rec = {
 			uid,
 			math.floor((r.hp_cur or 0) + 0.5),
 			math.floor((r.hp_max or 0) + 0.5),
@@ -86,7 +95,12 @@ function M.encode(records, version)
 			math.floor((r.sanity_max or 0) + 0.5),
 			math.floor((r.sanity_penalty or 0) + 0.5),
 			math.floor((r.flags or 0) + 0.5),
-		}, FIELD_SEP)
+		}
+		if version >= 2 then
+			-- origin is NUMERIC (the shard id the record came from); never stringify it.
+			rec[#rec + 1] = math.floor((r.origin or 0) + 0.5)
+		end
+		parts[#parts + 1] = table.concat(rec, FIELD_SEP)
 	end
 	parts[2] = tostring(count)
 	return table.concat(parts, REC_SEP)
@@ -123,20 +137,29 @@ function M.decode(str)
 		return nil, "record count mismatch (header says " .. count .. ", got " .. (#fields - 2) .. ")"
 	end
 
+	-- Per-record field count is version-aware: v1 = NUM_FIELDS (9), v2 = NUM_FIELDS + 1 (adds origin).
+	local nfields = (version >= 2) and (NUM_FIELDS + 1) or NUM_FIELDS
+
+	-- Numeric field names (parsed in order from f[2..]). v2 appends "origin" after "flags".
+	-- A v1 payload omits origin entirely, so the decoded record has no origin key (nil).
+	local NUMERIC = { "hp_cur", "hp_max", "hp_penalty", "hunger",
+		"sanity_cur", "sanity_max", "sanity_penalty", "flags" }
+	if version >= 2 then
+		NUMERIC[#NUMERIC + 1] = "origin"
+	end
+
 	local records = {}
 	for i = 3, #fields do
 		local f = {}
 		for tok in (fields[i] .. FIELD_SEP):gmatch("(.-)" .. FIELD_SEP) do
 			f[#f + 1] = tok
 		end
-		if #f ~= NUM_FIELDS then
-			return nil, "record " .. (i - 2) .. " has " .. #f .. " fields, expected " .. NUM_FIELDS
+		if #f ~= nfields then
+			return nil, "record " .. (i - 2) .. " has " .. #f .. " fields, expected " .. nfields
 		end
 		-- Validate each numeric field as we parse it. NOTE the Lua 5.1 trap: assigning a field to
 		-- nil (a failed tonumber) just makes the key absent, so a post-hoc `pairs` scan can NEVER
 		-- see a nil field. Check inline instead. (This bug was caught by the busted spec.)
-		local NUMERIC = { "hp_cur", "hp_max", "hp_penalty", "hunger",
-			"sanity_cur", "sanity_max", "sanity_penalty", "flags" }
 		local rec = { userid = f[1] }
 		for j, name in ipairs(NUMERIC) do
 			local x = tonumber(f[j + 1])
