@@ -1,0 +1,15 @@
+# release-manifest.txt — the single source of truth for what ships in a PartyHud
+# release archive (the Steam Workshop content). The release CI (.github/workflows/
+# release.yml) reads this to build the zip/tar.gz; tools/check-manifest.sh and the
+# partyhud-release-preflight skill audit it so a required module is never silently
+# omitted (a missing module = the mod fails to load = production accident).
+#
+# Rules: one path per line, relative to the repo root. '#' starts a comment; blank
+# lines are ignored. A directory (no trailing slash) ships its whole tree, so new
+# scripts/*.lua are picked up automatically. Top-level files are listed explicitly.
+modinfo.lua
+modmain.lua
+modicon.tex
+modicon.xml
+LICENSE
+scripts

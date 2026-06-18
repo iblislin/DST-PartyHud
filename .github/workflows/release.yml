@@ -1,0 +1,91 @@
+name: release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write   # least privilege: create release + upload assets via GITHUB_TOKEN
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        # default fetch-depth: 1 is fine — we package the tagged tree, not history.
+
+      - name: Validate release manifest (production-accident guard)
+        # Fails the release if a required module is not covered by release-manifest.txt,
+        # or a listed path is missing. Same checker the pre-flight skill runs locally.
+        run: bash tools/check-manifest.sh
+
+      - name: Assemble archives from manifest
+        id: pack
+        env:
+          TAG: ${{ github.ref_name }}     # e.g. "v2026.11" (bare tag, no refs/tags/ prefix)
+          MANIFEST: release-manifest.txt
+          STAGE: PartyHud2026             # top-level folder inside the archive
+        run: |
+          set -euo pipefail
+
+          # Re-run safety: clean any prior staging, then rebuild the tree.
+          rm -rf "$STAGE"
+          mkdir -p "$STAGE"
+
+          # Parse rules MUST match tools/check-manifest.sh (single source of truth).
+          # Fail loudly if any listed path is missing (missing source = release accident).
+          while IFS= read -r raw || [ -n "$raw" ]; do
+            line="${raw%%#*}"                 # drop inline/full-line comments
+            line="$(printf '%s' "$line" | sed -e 's/[[:space:]]*$//' -e 's/^[[:space:]]*//')"
+            [ -z "$line" ] && continue
+            if [ ! -e "$line" ]; then
+              echo "::error::manifest lists '$line' but it does not exist in the repo" >&2
+              exit 1
+            fi
+            if [ -d "$line" ]; then
+              # Copy the directory AS a child of STAGE, preserving its own name + nesting
+              # (scripts/ -> PartyHud2026/scripts/, incl. scripts/widgets/).
+              cp -R "$line" "$STAGE/"
+            else
+              # Top-level files land directly under PartyHud2026/ (dirname is '.').
+              dest="$STAGE/$(dirname "$line")"
+              mkdir -p "$dest"
+              cp "$line" "$dest/"
+            fi
+          done < "$MANIFEST"
+
+          echo "::group::staged tree"
+          find "$STAGE" -print | sort
+          echo "::endgroup::"
+
+          ZIP="PartyHud2026-${TAG}.zip"
+          TGZ="PartyHud2026-${TAG}.tar.gz"
+          # *.zip / *.tar.gz are gitignored; that's fine, these are build artifacts on
+          # the runner and gh uploads them straight off disk (never git-added).
+          rm -f "$ZIP" "$TGZ"
+          zip -r "$ZIP" "$STAGE" >/dev/null
+          tar czf "$TGZ" "$STAGE"
+
+          {
+            echo "zip=$ZIP"
+            echo "tgz=$TGZ"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Create GitHub Release and attach archives
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}   # gh CLI authenticates from GH_TOKEN
+          TAG: ${{ github.ref_name }}
+          ZIP: ${{ steps.pack.outputs.zip }}
+          TGZ: ${{ steps.pack.outputs.tgz }}
+        run: |
+          set -euo pipefail
+          # gh release create errors if the release already exists; route a re-tag/re-run
+          # through `upload --clobber` instead (--clobber is an upload flag, not a create flag).
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" "$ZIP" "$TGZ" --clobber
+          else
+            gh release create "$TAG" "$ZIP" "$TGZ" \
+              --title "$TAG" \
+              --generate-notes
+          fi
