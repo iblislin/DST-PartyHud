@@ -49,6 +49,8 @@ Subscribe on the Workshop, **or** place this folder into your server's `mods/` a
 Connecting players download it automatically. _(If you grab a GitHub source archive, rename the extracted folder to `partyhud`.)_
 
 ## Settings (each player chooses their own)
+> These are **per-player client options**. To change them you must **subscribe to the mod on the Workshop** (or have it as a local client mod) so it appears in your **Mods → PartyHud 2026 → Configure** list. If you only auto-downloaded it by joining a server, you can still play and see the HUD, but with the **default** settings and no Configure entry — that's normal for a server mod's client options.
+
 - **HUD Layout:** Horizontal / Vertical
 - **HUD Position:** Minimap / Minimap XL / Standard
 - **Show Your Own Badge:** Show / Skip (skip it — you already have your own status meters)
@@ -137,7 +139,12 @@ to work on current Don't Starve Together builds.
 [/list]
 
 [b]Note[/b] — this is a server mod: install it on your dedicated server (or enable
-when hosting) and connecting players download it automatically.
+when hosting) and connecting players download it automatically to play.
+
+[b]Tip[/b] — the settings above are per-player CLIENT options. To change your own
+(layout, low-HP alert, etc.) you must also SUBSCRIBE to this mod on the Workshop so it
+shows up in your Mods -> PartyHud 2026 -> Configure. If you only got it by joining a
+server, you can still play and see it, but with the default settings (no Configure entry).
 
 [b]Source[/b]: https://github.com/iblislin/DST-PartyHud
 Original PartyHUD by brianchenito, released into the public domain (Unlicense).
@@ -213,7 +220,11 @@ Thanks for the original work!
 [/list]
 
 [b]注意[/b] —— 這是伺服器端 mod:安裝在你的專用伺服器(或開房時啟用),
-連線的玩家會自動下載。
+連線的玩家會自動下載即可遊玩。
+
+[b]提示[/b] —— 上面的設定是「每位玩家」的 CLIENT 選項。要改自己的(排列、低 HP 警示等),
+你還必須在 Workshop 上「訂閱」這個 mod,它才會出現在你的 Mods -> PartyHud 2026 -> Configure
+裡。若你只是連伺服器自動下載的,仍可遊玩並看到 HUD,但只能用預設值(沒有 Configure 入口)。
 
 [b]原始碼[/b]:https://github.com/iblislin/DST-PartyHud
 原版 PartyHUD 作者 brianchenito,已釋出至公有領域(Unlicense)。感謝原作!
