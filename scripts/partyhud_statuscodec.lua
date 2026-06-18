@@ -64,12 +64,18 @@ local NUM_FIELDS = 9 -- userid + 8 numerics
 --                     sanity_cur, sanity_max, sanity_penalty, flags } (8 small ints + userid)
 function M.encode(records, version)
 	version = version or M.PROTOCOL_VERSION
-	local parts = { tostring(version), tostring(#records) }
+	-- The count header MUST match the records the body actually emits. ipairs (correctly) stops at
+	-- the first nil hole, while `#records` on a sparse array is undefined in Lua 5.1 -- so deriving
+	-- the header from `#records` could disagree with the body and make the receiver reject the whole
+	-- payload. Count what the loop emits instead (index 2 is a placeholder, patched after the loop).
+	local parts = { tostring(version), "0" }
+	local count = 0
 	for _, r in ipairs(records) do
 		local uid = tostring(r.userid or "")
 		-- guard: a userid must never carry a separator or it would corrupt the stream
 		assert(not uid:find(FIELD_SEP, 1, true) and not uid:find(REC_SEP, 1, true),
 			"userid contains a reserved separator: " .. uid)
+		count = count + 1
 		parts[#parts + 1] = table.concat({
 			uid,
 			math.floor((r.hp_cur or 0) + 0.5),
@@ -82,6 +88,7 @@ function M.encode(records, version)
 			math.floor((r.flags or 0) + 0.5),
 		}, FIELD_SEP)
 	end
+	parts[2] = tostring(count)
 	return table.concat(parts, REC_SEP)
 end
 

@@ -189,8 +189,13 @@ local function onstatusdisplaysconstruct(self)
 	-- (the widget) so they're cleaned up when the HUD is rebuilt, e.g. on your own migration.
 	if self.inst ~= nil and GLOBAL.TheWorld ~= nil then
 		local function on_presence_changed()
-			if GLOBAL.TheWorld ~= nil then
-				GLOBAL.TheWorld:DoTaskInTime(0.1, function()
+			-- Defer one beat so AllPlayers / GetClientTable have settled after the entered/exited
+			-- event. Scheduled on self.inst (the widget), NOT TheWorld: TheWorld outlives a HUD
+			-- rebuild, so a task parked on it could fire against this already-killed widget; parked
+			-- on self.inst, Widget:Kill's CancelAllPendingTasks tears it down. (The fire-time
+			-- self.owner guard is still kept as belt-and-suspenders.)
+			if self.inst ~= nil then
+				self.inst:DoTaskInTime(0.1, function()
 					if self.owner ~= nil and self.owner.UpdateBadges ~= nil then
 						self.owner.UpdateBadges()
 					end
