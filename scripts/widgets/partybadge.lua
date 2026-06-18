@@ -199,11 +199,12 @@ end
 -- blacks out the lost-max region from the TOP, mirroring the vanilla heart badge) rather than
 -- the base Badge bonusval/anim_bonus white-from-bottom arc.
 function PartyBadge:SetPercent(cur, max, penaltypercent)
+    cur = cur or 0 -- normalize once: cur feeds the ring fill AND the low-HP threshold compare below
     local m = (max ~= nil and max > 0) and max or 1
     Badge.SetPercent(self, cur / m, max)
     self.hptopper:GetAnimState():SetPercent("anim", 1 - (penaltypercent or 0))
     if self.num ~= nil then
-        self.num:SetString(tostring(math.floor((cur or 0) + 0.5)))
+        self.num:SetString(tostring(math.floor(cur + 0.5)))
         if self.hp_number_always then self.num:Show() end
     end
     -- v2026.9 low-HP alert: blink the border below the configured threshold (fraction of max HP).
@@ -313,6 +314,9 @@ end
 
 -- v2026.9: advance the low-HP pulse each frame. Only does work while low; StartUpdating/StopUpdating
 -- (in _set_low_hp) gate when this even runs, and the guard is belt-and-suspenders.
+-- INVARIANT: every path that hides this badge MUST call _set_low_hp(false) first (HideBadge/ShowDead
+-- already do). The engine's FrontEnd update loop gates on `enabled`, not `shown`, so a hide path that
+-- forgets to stop the pulse would keep firing OnUpdate every frame on a hidden badge (wasted work).
 function PartyBadge:OnUpdate(dt)
     if not self.low_hp then return end
     self._blink_t = self._blink_t + (dt or 0)
