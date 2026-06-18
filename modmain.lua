@@ -97,27 +97,38 @@ end
 
 -- Vertical layout wrap: how many badges fit in one column before running off the
 -- screen bottom. Badges live in the statusdisplays space (scaled 1.4 in controls.lua),
--- itself under topleft_root (scaled by TheFrontEnd:GetHUDScale()), so the visible height
--- in badge-local units = screenheight / (hudscale * 1.4). Detect it so small screens /
+-- itself under topleft_root (scaled by GetHUDScale() AND SCALEMODE_PROPORTIONAL), so the visible
+-- height in badge-local units = screenheight / (hudscale * 1.4 * prop). Detect it so small screens /
 -- large HUD-size settings wrap to a second column instead of overflowing off-screen.
 local function compute_percol(vy, bottom_reserve)
-	local scrnh
+	local scrnw, scrnh
 	if GLOBAL.TheSim ~= nil and GLOBAL.TheSim.GetScreenSize ~= nil then
-		local _, h = GLOBAL.TheSim:GetScreenSize()
-		scrnh = h
+		scrnw, scrnh = GLOBAL.TheSim:GetScreenSize()
 	end
 	local hudscale = 1
 	if GLOBAL.TheFrontEnd ~= nil and GLOBAL.TheFrontEnd.GetHUDScale ~= nil then
 		hudscale = GLOBAL.TheFrontEnd:GetHUDScale() or 1
 	end
-	if scrnh == nil or scrnh <= 0 or hudscale <= 0 then
+	if scrnh == nil or scrnh <= 0 or scrnw == nil or scrnw <= 0 or hudscale <= 0 then
 		if DEBUG_SHOWALL then
 			print("[PartyHud DEBUG] compute_percol fallback: scrnh="..tostring(scrnh).." hudscale="..tostring(hudscale))
 		end
 		return 6 -- safe fallback if the screen/HUD scale can't be read
 	end
 	local STATUS_SCALE = 1.4               -- statusdisplays default scale (controls.lua:155)
-	local usable = scrnh / (hudscale * STATUS_SCALE)
+	-- topleft_root (parent of statusdisplays) is BOTH SCALEMODE_PROPORTIONAL and SetScale(hudscale)
+	-- (controls.lua:503/559). The engine's proportional factor scales the badge relative to the
+	-- 1280x720 reference (min of the width/height ratios), capped at MAX_HUD_SCALE=1.25 on upscale
+	-- (controls.lua:506 SetMaxPropUpscale). So a badge's PIXEL height = local * STATUS_SCALE *
+	-- hudscale * prop. We used to OMIT `prop`: on a sub-720 window prop<1 shrinks the real badges but
+	-- `usable` didn't follow, so the column collapsed to a single badge. Divide it out so `usable`
+	-- (screen height in badge-local units) tracks the real badge size -> per-column stays stable as
+	-- the window resizes (and grows correctly on >1080p screens up to the 1.25 cap).
+	local REF_W, REF_H, MAX_PROP = 1280, 720, 1.25 -- RESOLUTION_X / RESOLUTION_Y / MAX_HUD_SCALE (constants.lua)
+	local prop = math.min(scrnw / REF_W, scrnh / REF_H)
+	if prop > MAX_PROP then prop = MAX_PROP end
+	if prop <= 0 then prop = 1 end
+	local usable = scrnh / (hudscale * STATUS_SCALE * prop)
 	local vgap = show_substatus and VERT_GAP or VERT_GAP_COMPACT -- effective gap (tighter when sub-rings hidden)
 	local rowpitch = -vgap                 -- positive distance between rows
 	-- reserve a FIXED keep-out zone at the bottom for the game's map (M) button. It must be a
@@ -129,8 +140,8 @@ local function compute_percol(vy, bottom_reserve)
 	local n = math.floor((vy - 60 + usable - bottom_reserve) / rowpitch) + 1
 	if n < 1 then n = 1 end
 	if DEBUG_SHOWALL then
-		print(string.format("[PartyHud DEBUG] scrnh=%.0f hudscale=%.3f usable=%.0f vy=%.0f gap=%.0f per_col=%d",
-			scrnh, hudscale, usable, vy, vgap, n))
+		print(string.format("[PartyHud DEBUG] scrnw=%.0f scrnh=%.0f hudscale=%.3f prop=%.3f usable=%.0f vy=%.0f gap=%.0f per_col=%d",
+			scrnw, scrnh, hudscale, prop, usable, vy, vgap, n))
 	end
 	return n
 end
