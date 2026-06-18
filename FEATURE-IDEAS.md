@@ -20,7 +20,7 @@
 
 ---
 
-## 1. 目前已有的功能基線(v2026.8 — SHIPPED 2026-06-18)
+## 1. 目前已有的功能基線(v2026.10 — SHIPPED 2026-06-18)
 
 判斷「新不新」的對照基準 —— 以下**已經有了,不要重複列**:
 
@@ -33,6 +33,8 @@
 - 每位玩家可自訂選項:顯示自己的 badge / 子環開關 / HP 數字(always vs hover)
 - **(v2026.8)跨 shard + 同-shard-遠距隊友**:看得到對面 shard(洞穴↔地面)與本 shard 超出網路視距的隊友;遠方隊友**變暗 + 標籤**(跨 shard =「Caves」/「Surface」、同 shard 遠 =「far」),視野內 local 永遠優先(不重複)。靠 shard mod RPC + `TheWorld.net` carrier `net_string` + 版本化 codec(`partyhud_statuscodec` / `partyhud_crossshard`)。選項 **Show Cross-Shard Teammates**。
 - **(v2026.8)版面強化**:proportional-scale 換欄數穩定(縮放/小視窗不再塌成一欄)、per-column 高度(只有最右欄留地圖鍵空間)、閃避雨量計與角色第二排徽章(Abigail / 靈感)、**背包感知**(側背包左移 / 整合式背包底部預留,開關/裝卸/換背包即時反應)、死亡骷髏置中。
+- **(v2026.9)crash 修正**:修掉 v2026.8 潛伏的伺服器 crash(裸 `tonumber` 不在 modmain 沙箱環境 → 玩家加入洞穴叢集時 master shard 爆)。教訓寫進 `dst-mod-crash-audit` skill(沙箱 global 白名單 + pause_when_empty 遮蔽 sim-tick task 的 load-smoke 盲點)。
+- **(v2026.10)低 HP 警示**:隊友 HP 低於門檻時徽章邊框**平滑紅色呼吸**(circleframe 通道,與火焰脈動共存;遠距/跨-shard 也脈動)。每人選項 **Low-HP Alert: Off / 40% / 25%(預設) / 15%**(占 max HP)。無音效(刻意)。
 
 ---
 
@@ -56,12 +58,9 @@
 - **價值 高 / 工時 低**。資料我們已經在讀(classified netvar),純 client。
 - **實作提示**:加一個「顯示數字 / 只顯示環」設定;hover 面板用標準 widget focus handler。跟下面第 4 項「精簡/詳細切換」天生一對。
 
-### 2. 可設定的低 HP 閃爍警示  ✅
-- **是什麼**:隊友 HP 低於門檻時 badge 閃爍(或輕音效)。
-- **為什麼**:**沒有任何 DST 隊友 mod 做這個** —— 真正的差異化,而且解決「誰快死了」的核心痛點。
-- **靈感**:跨遊戲常見模式,DST 隊友 mod 的空白。
-- **價值 高 / 工時 低**。**直接重用我們現成的 fire/temp 脈動機制**,只加一個 HP 門檻 slider。純 client。
-- **實作提示**:門檻當設定值;閃爍沿用 `StartWarning`/pulse;注意別跟 thermal pulse 顏色打架(可用不同節奏或顏色)。
+### 2. 可設定的低 HP 閃爍警示  — ✅ 已出貨 (v2026.10)
+- **是什麼**:隊友 HP 低於門檻時 badge 警示。
+- **狀態**:**v2026.10 已實現** —— 徽章邊框(circleframe)**平滑紅色呼吸**(1.2s sine breathe,用現成 `Lerp`),每人選項 `Low-HP Alert: Off/40/25/15`(占 max HP)。與火焰/過熱/失溫脈動**共存**(不同元件 = warning pulse vs circleframe),遠距/跨-shard 徽章也脈動。**無音效**(co-op 易刷,刻意不做)。實作上沒沿用 thermal 的 `StartWarning`(那是單一連續脈動通道),而是另起 circleframe + `StartUpdating/OnUpdate` 逐幀 lerp,經單一寫入者 `_apply_frame_colour` 與 foreign-dim 協調。保留此條僅作紀錄;不再是 backlog 項目。
 
 ### 3. 角色頭像 + 名字配色  ✅
 - **是什麼**:環中心放該角色的 avatar 圖(取代通用環),名字用玩家自己的顏色。
@@ -118,7 +117,7 @@
 ### 警示
 | 點子 | 是什麼 | 靈感來源 | 價值/工時/限制 |
 |---|---|---|---|
-| 低 HP 閃爍/音效 | 隊友低於門檻時閃 | (DST 隊友 mod 空白) | 高 / 低–中(見 Top 5 #2) |
+| ~~低 HP 閃爍/音效~~ | 隊友低於門檻時閃 | (DST 隊友 mod 空白) | ✅ **已出貨 v2026.10**(平滑紅色呼吸邊框;無音效) |
 | 死亡/復活 toast | 「X 死了 / 復活了」短暫提示 | Status Announcements(手動);自動化是空白 | 中高 / 中。我們已有 presence/ghost 事件;注意大伺服器刷屏 |
 | 著火/結凍 toast | 隊友著火時彈提示 | (空白;我們已脈動) | 低 / 低。已脈動,toast 是小增量 |
 
