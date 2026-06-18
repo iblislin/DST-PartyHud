@@ -41,6 +41,11 @@ A modernized fork of [PartyHUD](https://github.com/brianchenito/PartyHud) by **b
 ### Fixed in 2026.9
 - **Fixed a server crash** that hit a caves-enabled (two-shard) server when a player joined: a 2026.8 internal change called a function that isn't available in the mod's restricted environment, crashing the master shard once the cross-shard broadcast started. No gameplay/visual change — purely the crash fix. (If you ran 2026.8 on a caves cluster, update to 2026.9.)
 
+### New in 2026.10 — low-HP alert
+- A teammate's badge now **pulses a soft red ring border** when their HP drops below a threshold you choose, so "who's about to die" jumps out at a glance — the one cue no other DST teammate HUD has.
+- New per-player option **Low-HP Alert: Off / 40% / 25% / 15%** (percent of their max HP; default 25%).
+- The pulse **coexists with the fire/overheat/freeze warning** (different element, so a burning low-HP teammate shows both), and it works on **far / cross-shard** badges too — the teammate you can't see is exactly the one you most need flagged.
+
 ## Install (server mod)
 Subscribe on the Workshop, **or** place this folder into your server's `mods/` as `partyhud` and enable it in each shard's `modoverrides.lua`:
 ```lua
@@ -57,6 +62,7 @@ Connecting players download it automatically. _(If you grab a GitHub source arch
 - **Hunger/Sanity Sub-gauges:** Show / Hide (hide for a compact HP-only badge)
 - **Show Cross-Shard Teammates:** Show / Hide (teammates on the other shard or out of view range; on by default)
 - **HP Number:** Always / On hover
+- **Low-HP Alert:** Off / 40% / 25% / 15% (pulse a teammate's badge border red below this % of their max HP; default 25%)
 - **[Test] Show mock badges:** fills empty slots with fake teammates to preview the layout (only you see it; default off)
 
 ## Credits & License
@@ -128,6 +134,15 @@ to work on current Don't Starve Together builds.
     update to 2026.9 if you ran 2026.8 with caves.
 [/list]
 
+[b]New in 2026.10 — low-HP alert[/b]
+[list]
+[*] A teammate's badge pulses a soft red ring border when their HP drops below a threshold you pick,
+    so "who's about to die" stands out at a glance
+[*] New option Low-HP Alert: Off / 40% / 25% / 15% (percent of their max HP; default 25%)
+[*] Coexists with the fire/overheat/freeze warning (different element) and works on far / cross-shard
+    badges too
+[/list]
+
 [b]Settings (each player picks their own)[/b]
 [list]
 [*] HUD Layout: Horizontal / Vertical
@@ -136,6 +151,7 @@ to work on current Don't Starve Together builds.
 [*] Hunger/Sanity Sub-gauges: Show / Hide
 [*] Show Cross-Shard Teammates: Show / Hide (other-shard or out-of-view teammates; on by default)
 [*] HP Number: Always / On hover
+[*] Low-HP Alert: Off / 40% / 25% / 15% (pulse the badge border red below this % of max HP)
 [/list]
 
 [b]Note[/b] — this is a server mod: install it on your dedicated server (or enable
@@ -209,6 +225,14 @@ Thanks for the original work!
     mod 沙箱環境沒有的函式)。無玩法/視覺變更;若你在 2026.8 開了洞穴,請更新到 2026.9。
 [/list]
 
+[b]2026.10 新增 —— 低 HP 警示[/b]
+[list]
+[*] 隊友 HP 低於你設定的門檻時,徽章邊框會以柔和的紅色脈動,讓「誰快死了」一眼就看到 ——
+    這是其他 DST 隊友 HUD 都沒有的提示
+[*] 新選項 Low-HP Alert(低 HP 警示):Off / 40% / 25% / 15%(占其最大 HP 的百分比;預設 25%)
+[*] 與著火/過熱/失溫警示並存(不同元件,所以又低血又著火會同時顯示),遠距 / 跨-shard 徽章也會脈動
+[/list]
+
 [b]設定(每位玩家各自選擇)[/b]
 [list]
 [*] HUD Layout(排列):Horizontal(水平)/ Vertical(垂直)
@@ -217,6 +241,7 @@ Thanks for the original work!
 [*] Hunger/Sanity Sub-gauges(飢餓/理智子環):Show / Hide
 [*] Show Cross-Shard Teammates(顯示跨 shard 隊友):Show / Hide(另一 shard 或超出視野的隊友;預設開啟)
 [*] HP Number(HP 數字):Always(總是)/ On hover(滑鼠移上)
+[*] Low-HP Alert(低 HP 警示):Off / 40% / 25% / 15%(低於最大 HP 此百分比時,徽章邊框紅色脈動)
 [/list]
 
 [b]注意[/b] —— 這是伺服器端 mod:安裝在你的專用伺服器(或開房時啟用),
