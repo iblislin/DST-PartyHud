@@ -163,19 +163,15 @@ local function backpack_layout_mode()
 	local body = p.replica.inventory:GetEquippedItem(eslot)
 	local cont = (body ~= nil and body.replica ~= nil) and body.replica.container or nil
 	if cont == nil then return 0 end
-	-- Only an OPEN container shows its UI (right-click toggles open/close); a closed backpack overlaps
-	-- nothing -> no shift. Detect "open" robustly: prefer the HUD's open-widget map
-	-- (HUD.controls.containers[body], set/cleared as the side widget opens/closes, playerhud.lua) -- on a
-	-- backpack SWAP while the old one is open, the NEW pack's replica IsOpenedBy lags (stays false though
-	-- its side widget is already shown), which used to drop the shift. Fall back to IsOpenedBy for the
-	-- integrated case (no side widget) and as a general backstop.
-	local open = false
-	local hud = p.HUD
-	if hud ~= nil and hud.controls ~= nil and hud.controls.containers ~= nil and hud.controls.containers[body] ~= nil then
-		open = true
-	elseif cont.IsOpenedBy ~= nil and cont:IsOpenedBy(p) then
-		open = true
-	end
+	-- "Open" = the backpack UI is up. cont.opener is set synchronously in AttachOpener the moment the
+	-- opener entity replicates -- one frame BEFORE _isopen/IsOpenedBy -- so it avoids the post-swap race
+	-- where the equipped item already flipped to the new pack but its open-state has not gone live yet.
+	-- Fallbacks: the HUD open-widget map (normal side widget) and inventorybar.backpack (integrated mode,
+	-- which never populates controls.containers).
+	local ctrls = (p.HUD ~= nil) and p.HUD.controls or nil
+	local open = (cont.opener ~= nil)
+		or (ctrls ~= nil and ctrls.containers ~= nil and ctrls.containers[body] ~= nil)
+		or (ctrls ~= nil and ctrls.inv ~= nil and ctrls.inv.backpack == body)
 	if not open then return 0 end
 	local integrated = (_G.TheInput ~= nil and _G.TheInput:ControllerAttached())
 		or (_G.Profile ~= nil and _G.Profile.GetIntegratedBackpack ~= nil and _G.Profile:GetIntegratedBackpack())
@@ -272,6 +268,20 @@ local function layout_badges(badgearray)
 	end
 end
 
+-- Single re-layout path for DYNAMIC state (backpack mode / second-row band). Recomputes the cached
+-- comparison state AND lays out only when it changed -- so every trigger goes through here and the
+-- cache can never desync (the swap bug was a trigger that laid out directly without updating the cache,
+-- which then fooled the poll's change-check into "no change" forever).
+local function relayout_if_changed(self)
+	if self == nil or self.badgearray == nil then return end
+	local m = backpack_layout_mode()
+	local c, r = status_second_row(self)
+	if m ~= last_bpmode or c ~= second_row_cols or r ~= second_row_reserve then
+		last_bpmode, second_row_cols, second_row_reserve = m, c, r
+		layout_badges(self.badgearray)
+	end
+end
+
 -- [DEBUG/util] runtime layout switch from the client console, no reconnect needed:
 --   PartyHud_Layout()  -> toggle Vertical <-> Horizontal
 --   PartyHud_Layout(1) -> Horizontal,  PartyHud_Layout(2) -> Vertical
@@ -300,51 +310,30 @@ local function onstatusdisplaysconstruct(self)
 		self.badgearray[i]:SetHPNumberAlways(hp_number_always)
 	end
 
-	-- v2026.8: track the top-right cluster's LOW second-row band (moisture/rain meter, Wendy's Abigail
-	-- pet-health, Wigfrid's inspiration -- see status_second_row) so column 0 can dodge it (it sits where
-	-- our first column's top would be). moisturedelta fires on the owner on every moisture change; only
-	-- re-layout when the second-row presence actually toggles. Registered on self.inst with self.owner as
-	-- source so Widget:Kill tears it down with the HUD.
+	-- v2026.8: re-layout on the dynamic state that changes the backpack mode / second-row dodge.
+	-- Event-driven (instant) + a slow safety-net poll. The equip-netvar and the container-open channels
+	-- settle on DIFFERENT frames, so on an equip/swap we re-sample ONE frame later (DoStaticTaskInTime 0)
+	-- after both settle -- a same-frame read hits the race. "refreshinventory" is guaranteed to fire on a
+	-- backpack swap (it drives the stock inventory bar rebuild); equip/unequip cover the BODY slot.
+	-- moisturedelta has no two-channel race, so it samples immediately. ALL paths go through
+	-- relayout_if_changed so the cache stays consistent.
 	if self.inst ~= nil and self.owner ~= nil then
-		second_row_cols, second_row_reserve = status_second_row(self)
-		local function refresh_second_row_layout()
-			local c, r = status_second_row(self)
-			if c ~= second_row_cols or r ~= second_row_reserve then
-				second_row_cols, second_row_reserve = c, r
-				layout_badges(self.badgearray)
+		local BODY = (_G.EQUIPSLOTS ~= nil and _G.EQUIPSLOTS.BODY) or "body"
+		local function deferred()
+			if self.inst ~= nil and self.inst.DoStaticTaskInTime ~= nil then
+				self.inst:DoStaticTaskInTime(0, function() relayout_if_changed(self) end)
+			elseif self.inst ~= nil and self.inst.DoTaskInTime ~= nil then
+				self.inst:DoTaskInTime(0, function() relayout_if_changed(self) end)
 			end
 		end
-		self.inst:ListenForEvent("moisturedelta", refresh_second_row_layout, self.owner)
-	end
-
-	-- v2026.8: re-layout when a backpack is equipped/unequipped on the BODY slot (Mode A shifts the
-	-- columns left; Mode B reserves more bottom space). Bound to self.inst with self.owner as source so
-	-- it's torn down with the HUD. The integrated-backpack SETTING toggle pushes no event, but the other
-	-- refreshes (moisture/presence/refreshhudsize/DoTaskInTime) re-call layout_badges and re-evaluate.
-	if self.inst ~= nil and self.owner ~= nil then
-		local function on_equip_changed(_, data)
-			if data == nil or data.eslot == nil or data.eslot == ((_G.EQUIPSLOTS ~= nil and _G.EQUIPSLOTS.BODY) or "body") then
-				layout_badges(self.badgearray)
-			end
+		relayout_if_changed(self) -- initial: set the cache + first layout
+		self.inst:ListenForEvent("refreshinventory", deferred, self.owner)
+		self.inst:ListenForEvent("equip", function(_, d) if d == nil or d.eslot == nil or d.eslot == BODY then deferred() end end, self.owner)
+		self.inst:ListenForEvent("unequip", function(_, d) if d == nil or d.eslot == nil or d.eslot == BODY then deferred() end end, self.owner)
+		self.inst:ListenForEvent("moisturedelta", function() relayout_if_changed(self) end, self.owner)
+		if self.inst.DoPeriodicTask ~= nil then
+			self.inst:DoPeriodicTask(1.0, function() relayout_if_changed(self) end) -- safety net (integrated-setting toggle fires no event)
 		end
-		self.inst:ListenForEvent("equip", on_equip_changed, self.owner)
-		self.inst:ListenForEvent("unequip", on_equip_changed, self.owner)
-	end
-
-	-- v2026.8: right-click open/close of the backpack AND the integrated-backpack setting toggle fire
-	-- NO event, so poll the effective backpack UI mode and re-layout only when it CHANGES. Bound to
-	-- self.inst so Widget:Kill's CancelAllPendingTasks tears it down; cheap (a couple of replica reads
-	-- + a compare per half second).
-	if self.inst ~= nil and self.inst.DoPeriodicTask ~= nil then
-		self.inst:DoPeriodicTask(0.5, function()
-			local m = backpack_layout_mode()
-			local c, r = status_second_row(self)
-			if m ~= last_bpmode or c ~= second_row_cols or r ~= second_row_reserve then
-				last_bpmode = m
-				second_row_cols, second_row_reserve = c, r
-				layout_badges(self.badgearray)
-			end
-		end)
 	end
 
 	-- Lay out now (best-effort), then again next frame: this postconstruct runs BEFORE
