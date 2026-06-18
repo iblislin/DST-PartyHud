@@ -243,6 +243,20 @@ local function layout_badges(badgearray)
 	end
 end
 
+-- [DEBUG/util] runtime layout switch from the client console, no reconnect needed:
+--   PartyHud_Layout()  -> toggle Vertical <-> Horizontal
+--   PartyHud_Layout(1) -> Horizontal,  PartyHud_Layout(2) -> Vertical
+-- Reassigns the `layout` upvalue (which layout_badges reads) and re-lays-out the live badges.
+-- Client-only effect (no-op on a dedicated server: ThePlayer/HUD are nil there). Returns the new value.
+GLOBAL.PartyHud_Layout = function(n)
+	if n == nil then layout = (layout == 2) and 1 or 2 else layout = n end
+	local p = _G.ThePlayer
+	local sd = p ~= nil and p.HUD ~= nil and p.HUD.controls ~= nil and p.HUD.controls.status or nil
+	if sd ~= nil and sd.badgearray ~= nil then layout_badges(sd.badgearray) end
+	print("[PartyHud] layout = " .. tostring(layout) .. (layout == 2 and " (Vertical)" or " (Horizontal)"))
+	return layout
+end
+
 --constructor for badge array
 local function onstatusdisplaysconstruct(self)
 
