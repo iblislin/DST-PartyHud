@@ -51,7 +51,7 @@ local hp_number_always = (GetModConfigData("hp_number", true) == 1) -- false = H
 -- block is skipped). Does NOT gate the server-side send/publish -- other clients may still want it on.
 -- ~=0 makes a missing/older config default to shown.
 local show_crossshard = (GetModConfigData("show_crossshard", true) ~= 0)
-local DEBUG_SHOWALL = false -- [TEST ONLY] fill all badge slots so layout is visible solo
+local DEBUG_SHOWALL = (GetModConfigData("debug_showall", true) == 1) -- [TEST] client option: mock-fill empty slots to preview layout (only this client sees it)
 -- [vertical layout tunables] edit these then restart client; only used when layout=Vertical
 local VERT_X    = 0    -- horizontal pos (more negative = further left)
 local VERT_Y    = -130 -- y of the FIRST (top) badge; lower number = lower on screen
@@ -63,6 +63,8 @@ local VERT_BOTTOM_RESERVE = 190 -- badge-local units kept clear at the bottom fo
                                 -- button. FIXED (not per-row): the compact gap is tighter, so a
                                 -- per-row reserve would pack an extra badge into the button. Larger
                                 -- = wraps a column one badge sooner.
+local MOISTURE_TOP_RESERVE = 85 -- badge-local units to push the FIRST column's top DOWN when the game's moisture (rain) meter is showing, so our column 0 doesn't cover it. Visually tuned.
+local moisture_active = false -- client-local: is the game's moisture (rain) meter currently popped up (owner moisture > 0)? When true, column 0 is pushed down to dodge it.
 
 --imports partybadge
 local phud_custombadge= _G.require "widgets/partybadge"
@@ -146,10 +148,24 @@ local function layout_badges(badgearray)
 	if positional==0 or positional==1 then vstartx, vstarty = phud_xpos, phud_ypos end
 	local vgap = show_substatus and VERT_GAP or VERT_GAP_COMPACT -- effective gap (tighter when sub-rings hidden)
 	local per_col = compute_percol(vstarty)
+	-- v2026.8: when the game's moisture (rain) meter is showing it sits right below the sanity badge,
+	-- exactly where our first column's top would be. Push ONLY column 0 down by MOISTURE_TOP_RESERVE so
+	-- it clears the meter; columns 2+ keep the normal top y. Column 0's reduced height is folded into the
+	-- wrap (compute_percol of the lower start = col 0's smaller capacity), so the overall column folding
+	-- recalculates for the changed available height.
+	local col0_y   = moisture_active and (vstarty - MOISTURE_TOP_RESERVE) or vstarty
+	local col0_cap = moisture_active and compute_percol(col0_y) or per_col
 	for i = 1, #badgearray do
-		local col = math.floor((i-1)/per_col)
-		local row = (i-1) % per_col
-		badgearray[i]:SetPosition(vstartx - VERT_COL_W*col, vstarty + vgap*row, 0)
+		local col, row, ystart
+		if i <= col0_cap then
+			col, row, ystart = 0, i - 1, col0_y
+		else
+			local j = i - col0_cap - 1
+			col = 1 + math.floor(j / per_col)
+			row = j % per_col
+			ystart = vstarty
+		end
+		badgearray[i]:SetPosition(vstartx - VERT_COL_W*col, ystart + vgap*row, 0)
 	end
 end
 
@@ -162,6 +178,23 @@ local function onstatusdisplaysconstruct(self)
 		self.badgearray[i]=self:AddChild(phud_custombadge(self,self.owner))
 		self.badgearray[i]:SetSubGauges(show_substatus) -- apply the sub-gauge config at construct time
 		self.badgearray[i]:SetHPNumberAlways(hp_number_always)
+	end
+
+	-- v2026.8: track the game's moisture (rain) meter so column 0 can dodge it (it sits where our
+	-- first column's top would be). moisturedelta fires on the owner on every moisture change; only
+	-- re-layout when the meter's shown/hidden state actually toggles (crosses 0). Registered on
+	-- self.inst with self.owner as source so Widget:Kill tears it down with the HUD.
+	if self.inst ~= nil and self.owner ~= nil then
+		moisture_active = (self.owner.GetMoisture ~= nil and (self.owner:GetMoisture() or 0) > 0) or false
+		local function refresh_moisture_layout()
+			local m = (self.owner ~= nil and self.owner.GetMoisture ~= nil and self.owner:GetMoisture()) or 0
+			local active = m > 0
+			if active ~= moisture_active then
+				moisture_active = active
+				layout_badges(self.badgearray)
+			end
+		end
+		self.inst:ListenForEvent("moisturedelta", refresh_moisture_layout, self.owner)
 	end
 
 	-- Lay out now (best-effort), then again next frame: this postconstruct runs BEFORE

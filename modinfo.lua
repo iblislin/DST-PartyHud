@@ -89,4 +89,15 @@ configuration_options=
 	default=1,
 	client = true,
 	},
+		{
+	name="debug_showall",
+	label="[Test] Show mock badges",
+	hover="Fill empty slots with fake teammates to preview the HUD layout. Only you see this; it does not affect other players.",
+	options={
+			{description = "Off", data = 0},
+			{description = "On", data = 1}
+		},
+	default=0,
+	client = true,
+	},
 }
