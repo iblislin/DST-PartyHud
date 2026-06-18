@@ -157,6 +157,8 @@ nested badge needs its own pass.
 | HUD overlaps a vanilla meter that appears only *sometimes* (rain / opened backpack / Abigail / inspiration) | You positioned against the always-present UI only — account for the *conditional* vanilla widgets — item 11 |
 | Per-column count collapses to 1 (lots of empty space) on a small / resized window | Wrap math omitted the `SCALEMODE_PROPORTIONAL` factor — item 12 |
 | Need an icon's exact pixel size to centre / size it, but it's not in the scripts | It's in the texture atlas — extract `hud.xml` UVs + the `.tex` KTEX dims — references §13 |
+| HUD shifts to dodge one obstacle but then covers a *different* one; or a "wide" dodge over-pads after a shift; or one badge state under-clears | Obstacles are independent, a shift changes how many columns a band spans, and the dodge amount = the deepest active badge — references §14 |
+| Re-layout fix "works sometimes" / the layout stays wrong for many seconds after a state change (equip/swap, open/close) until you re-toggle | A change-gated poll desynced because a different re-layout path didn't update the cached state; and/or `IsOpenedBy` lagged a swap — route all re-layout through one cache-syncing fn; detect "open" via `HUD.controls.containers` — references §15 |
 
 ## After the audit — the in-game visual test
 

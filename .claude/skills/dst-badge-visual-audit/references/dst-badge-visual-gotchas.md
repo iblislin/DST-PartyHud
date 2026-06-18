@@ -19,6 +19,8 @@ trusting these numbers blindly.
 11. Coexistence with OTHER vanilla HUD widgets (positioning / collision)
 12. Proportional HUD scale in layout math (resized-window collapse)
 13. Exact pixel size of an atlas element (not in the Lua scripts)
+14. Dodging is per-obstacle; shifting changes the span; depth sets the amount
+15. Reacting to dynamic state: events + a poll, and keeping the cache in sync
 
 ---
 
@@ -278,3 +280,50 @@ native**. **CAVEAT:** a square UV element can still draw its visible glyph **off
 own bounds** — the atlas gives the element BOX, not the glyph's optical centre — so final centring
 still needs an in-game eyeball: **bracket** the offset (find the value that reads left and the one
 that reads right; the centre is between them).
+
+## 14. Dodging is per-obstacle; shifting changes the span; depth sets the amount
+
+When a HUD that dodges multiple conditional obstacles also *moves* (e.g. shifts left to clear one
+obstacle), three things that are easy to get wrong — all learned tuning the right-side teammate HUD:
+
+- **Obstacles are INDEPENDENT — a shift that clears one does not clear the others.** Shifting the
+  columns LEFT to dodge the right-edge backpack (§11) does NOT move them out from under the *top-right
+  status cluster* — that cluster is anchored separately and stays put. We wrongly zeroed the top dodge
+  in "shifted" (backpack) mode and the shifted column then covered the (displaced) moisture meter.
+  Handle each obstacle's dodge on its own axis/condition; don't assume one fix covers another.
+- **A shift CHANGES HOW MANY of your columns an obstacle spans — recompute the span in the shifted
+  frame.** Un-shifted, a wide top-right band covered cols 0+1; after shifting the columns left ~one
+  column, the same band covers only the new col 0 (col 1 moved out from under it) — and a single
+  non-displaced badge is cleared entirely. So the dodged-column COUNT differs by mode; don't reuse the
+  un-shifted count. (We used `dodge_cols = shifted and ((span>=2) and 1 or 0) or span`.)
+- **The dodge AMOUNT = the DEEPEST active obstacle, not a single constant.** Stacked/alternative
+  badges sit at different depths (moisture meter y-115, Abigail pet-health -100, Wigfrid inspiration
+  -130). One reserve tuned for the moisture meter under-clears the deeper inspiration badge. Make the
+  push = max over the active badges' depths (we returned a per-state `reserve` from the detector), so
+  each case clears with its own minimum.
+
+## 15. Reacting to dynamic state: events + a poll, and keeping the cache in sync
+
+A HUD that re-lays-out on dynamic state (wet/dry, equip/unequip, container open/close, character
+badges, a settings toggle) usually needs BOTH event listeners (instant where an event exists) and a
+small periodic poll (for state that fires NO event — e.g. a backpack right-click open/close, an
+in-options setting). Two traps:
+
+- **Detection can LAG a transition — prefer the signal that reflects what is ACTUALLY DRAWN.** A
+  container's replica `IsOpenedBy(ThePlayer)` can read false for a moment right after an equip/swap
+  even though its widget is already on screen (the opener/`_isopen` state is set a frame later, via a
+  `DoTaskInTime(0)`). The robust "is this container's UI up" signal is the HUD's own open-widget map
+  `ThePlayer.HUD.controls.containers[item]` (set/cleared as the widget opens/closes), with
+  `IsOpenedBy` as a fallback.
+- **If a poll is CHANGE-GATED, EVERY re-layout path must update the cached comparison state — or the
+  poll desyncs and never corrects.** Symptom we hit: an `equip` listener re-laid-out directly (at the
+  transient state during a backpack swap) but did NOT update the poll's `last_mode` cache; the poll
+  then computed the (now-correct) mode, saw it `== last_mode` (stale), concluded "no change", and left
+  the wrong layout up for 10s+ until a manual re-toggle. Fix: route ALL re-layout triggers through one
+  function that recomputes AND writes the cached state before laying out, so the poll's change-check is
+  always measured against what was last actually applied. (Don't let two mechanisms write the layout
+  while only one writes the cache.)
+- **TBD — backpack pack-swap-while-open:** as of this writing the exact client open/close event
+  ordering on a *swap* (and whether an open/close event exists for instant re-layout vs. the ~0.5s
+  poll) is still under source research; the cache-sync fix above is the working theory. Update this
+  section with the confirmed event (or "polling only") once verified.
