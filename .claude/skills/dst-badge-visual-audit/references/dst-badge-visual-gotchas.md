@@ -323,7 +323,20 @@ in-options setting). Two traps:
   function that recomputes AND writes the cached state before laying out, so the poll's change-check is
   always measured against what was last actually applied. (Don't let two mechanisms write the layout
   while only one writes the cache.)
-- **TBD — backpack pack-swap-while-open:** as of this writing the exact client open/close event
-  ordering on a *swap* (and whether an open/close event exists for instant re-layout vs. the ~0.5s
-  poll) is still under source research; the cache-sync fix above is the working theory. Update this
-  section with the confirmed event (or "polling only") once verified.
+- **CONFIRMED — backpack pack-swap-while-open (the canonical instance of this trap):** the open
+  state is NOT carried by the equip netvar; it is a separate networked `container_opener` entity. On
+  the client, two channels settle on DIFFERENT frames: (1) the equip netvar →
+  `inventory_classified` `DoStaticTaskInTime(0)` → `GetEquippedItem` flips + `equip`/`unequip` fire;
+  (2) the `container_opener` entity replicates → `container_replica:AttachOpener` (sets `self.opener`
+  **synchronously**) → schedules `DoTaskInTime(0)` → next frame `Open` sets `_isopen=true` /
+  `IsOpenedBy` true / `controls.containers[item]`. So on a hot-swap the equipped item is already
+  pack2 while pack2's open-state is a frame or two behind → a same-frame read sees "not open" and
+  drops the dodge. **Earliest truthful "open" signal: `body.replica.container.opener ~= nil`** (set in
+  `AttachOpener`, one frame before `_isopen`/`IsOpenedBy`); `controls.containers[body]` (side widget)
+  and `controls.inv.backpack == body` (integrated mode) are fallbacks. **Instant re-layout IS
+  possible**: listen on the player for **`"refreshinventory"`** (guaranteed on the swap — it drives
+  the stock inventory-bar rebuild) plus `"equip"`/`"unequip"`, and re-sample **one frame later via
+  `DoStaticTaskInTime(0)`** (a same-frame read inside the handler still hits the race). Keep a low-rate
+  (~1s) poll only as a safety net + for the integrated-backpack setting toggle (which fires no event).
+  This is exactly §15's "prefer the actually-true signal" + "route everything through one cache-syncing
+  fn" — the swap was the case that exposed both.
