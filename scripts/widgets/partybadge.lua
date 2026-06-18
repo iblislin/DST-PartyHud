@@ -138,8 +138,7 @@ local PartyBadge = Class(Badge, function(self, owner)
     -- the low_hp_alert config; the rest are driven by _set_low_hp / the blink task.
     self.low_hp_threshold = 0
     self.low_hp = false
-    self._blink_on = false
-    self._blink_task = nil
+    self._blink_t = 0 -- pulse phase accumulator (seconds); advanced in OnUpdate while low
 end)
 
 -- v2026.8: dim alpha applied to every visible badge element when the slot shows a FOREIGN
@@ -154,8 +153,9 @@ local FULL_ALPHA    = 1
 -- against the red ring underneath. NOTE: circleframe's animstate also carries the heart ICON glyph
 -- (OverrideSymbol("icon",...) in Badge._ctor), so SetMultColour tints the heart red too during the
 -- alarm phase -- intended (a red heart reads as a health alarm).
-local LOW_HP_TINT         = { 1, 0.15, 0.15 }
-local LOW_HP_BLINK_PERIOD = 0.6 -- seconds per toggle (1.2s full on/off cycle)
+local LOW_HP_TINT       = { 1, 0.15, 0.15 }
+local LOW_HP_PULSE_SECS = 1.2 -- one full breathe cycle (rest -> alarm -> rest), seconds
+local LOW_HP_PULSE_W    = (2 * math.pi) / LOW_HP_PULSE_SECS -- angular speed for the sine pulse
 
 -- Apply a uniform alpha to a UIAnim's animstate while keeping its existing RGB. We re-assert the
 -- base RGB explicitly (mult-colour is absolute, not cumulative) so a restore can't leave a stale
@@ -279,37 +279,43 @@ end
 -- desyncing (same idea as the v2026.8 "one cache-syncing relayout fn" fix).
 function PartyBadge:_apply_frame_colour()
     if self.circleframe == nil then return end
-    if self.low_hp and self._blink_on then
-        -- alarm phase: red at FULL alpha so the alert stays visible even on a dimmed far badge.
-        self.circleframe:GetAnimState():SetMultColour(LOW_HP_TINT[1], LOW_HP_TINT[2], LOW_HP_TINT[3], 1)
+    -- baseline border = white at the badge's current alpha (dimmed if this is a far teammate).
+    local base_a = self.foreign and FOREIGN_ALPHA or FULL_ALPHA
+    if self.low_hp then
+        -- smooth "breathe" between baseline and alarm-red: a sine on the OnUpdate-advanced phase
+        -- gives k in 0..1; Lerp (mathutil) each channel. Alpha rises toward 1 at the alarm peak so
+        -- the alert stays visible even on a dimmed far badge. Single writer -> coexists with the dim.
+        local k = 0.5 + 0.5 * math.sin(self._blink_t * LOW_HP_PULSE_W)
+        self.circleframe:GetAnimState():SetMultColour(
+            Lerp(1, LOW_HP_TINT[1], k),
+            Lerp(1, LOW_HP_TINT[2], k),
+            Lerp(1, LOW_HP_TINT[3], k),
+            Lerp(base_a, 1, k))
     else
-        -- rest phase / not low: baseline white border at the badge's current alpha (dim if foreign).
-        local a = self.foreign and FOREIGN_ALPHA or FULL_ALPHA
-        self.circleframe:GetAnimState():SetMultColour(1, 1, 1, a)
+        self.circleframe:GetAnimState():SetMultColour(1, 1, 1, base_a)
     end
 end
 
--- v2026.9: enter/leave the low-HP blinking state. Idempotent. The 0.6s toggle task is parked on
--- self.inst (the widget entity) so Widget:Kill tears it down; we also cancel it explicitly here.
+-- v2026.9: enter/leave the low-HP pulsing state. Idempotent. Uses the widget per-frame update loop
+-- (StartUpdating/StopUpdating + OnUpdate) so the border can fade smoothly; Widget:Kill stops updates.
 function PartyBadge:_set_low_hp(islow)
     islow = islow and true or false
     if islow == self.low_hp then return end
     self.low_hp = islow
     if islow then
-        self._blink_on = true -- go red immediately, then toggle
-        if self._blink_task == nil and self.inst ~= nil then
-            self._blink_task = self.inst:DoPeriodicTask(LOW_HP_BLINK_PERIOD, function()
-                self._blink_on = not self._blink_on
-                self:_apply_frame_colour()
-            end)
-        end
+        self._blink_t = 0    -- begin the breathe from the rest phase
+        self:StartUpdating() -- per-frame OnUpdate advances the sine pulse
     else
-        if self._blink_task ~= nil then
-            self._blink_task:Cancel()
-            self._blink_task = nil
-        end
-        self._blink_on = false
+        self:StopUpdating()
     end
+    self:_apply_frame_colour()
+end
+
+-- v2026.9: advance the low-HP pulse each frame. Only does work while low; StartUpdating/StopUpdating
+-- (in _set_low_hp) gate when this even runs, and the guard is belt-and-suspenders.
+function PartyBadge:OnUpdate(dt)
+    if not self.low_hp then return end
+    self._blink_t = self._blink_t + (dt or 0)
     self:_apply_frame_colour()
 end
 
