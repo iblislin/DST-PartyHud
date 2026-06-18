@@ -52,6 +52,7 @@ local hp_number_always = (GetModConfigData("hp_number", true) == 1) -- false = H
 -- ~=0 makes a missing/older config default to shown.
 local show_crossshard = (GetModConfigData("show_crossshard", true) ~= 0)
 local DEBUG_SHOWALL = (GetModConfigData("debug_showall", true) == 1) -- [TEST] client option: mock-fill empty slots to preview layout (only this client sees it)
+local low_hp_threshold = (GetModConfigData("low_hp_alert", true) or 0) / 100 -- v2026.9: 0 = disabled; fraction of max HP
 -- [vertical layout tunables] edit these then restart client; only used when layout=Vertical
 local VERT_X    = 0    -- horizontal pos (more negative = further left)
 local VERT_Y    = -130 -- y of the FIRST (top) badge; lower number = lower on screen
@@ -308,6 +309,7 @@ local function onstatusdisplaysconstruct(self)
 		self.badgearray[i]=self:AddChild(phud_custombadge(self,self.owner))
 		self.badgearray[i]:SetSubGauges(show_substatus) -- apply the sub-gauge config at construct time
 		self.badgearray[i]:SetHPNumberAlways(hp_number_always)
+		self.badgearray[i].low_hp_threshold = low_hp_threshold -- v2026.9 low-HP alert threshold
 	end
 
 	-- v2026.8: re-layout on the dynamic state that changes the backpack mode / second-row dodge.

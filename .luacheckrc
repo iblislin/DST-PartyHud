@@ -22,6 +22,7 @@ read_globals = {
   "STRINGS",
   "BODYTEXTFONT", "TALKINGFONT", "TITLEFONT", "NEWFONT", "CHATFONT",
   "ANCHOR_MIDDLE", "ANCHOR_LEFT", "ANCHOR_RIGHT", "ANCHOR_TOP", "ANCHOR_BOTTOM",
+  "Lerp", -- DST math global (mathutil.lua), injected into the mod env
 }
 
 -- modmain.lua does `_G = GLOBAL`
