@@ -115,7 +115,7 @@ local PartyBadge = Class(Badge, function(self, owner)
 
     -- dead indicator
     self.dead = self:AddChild(Image("images/hud.xml", "tab_arcane.tex"))
-    self.dead:SetPosition(-10, 0, 0)
+    self.dead:SetPosition(0, 0, 0)
     self.dead:SetScale(0.7)
     self.dead:Hide()
 

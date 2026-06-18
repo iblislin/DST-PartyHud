@@ -73,7 +73,7 @@ local BACKPACK_SHIFT_X = 100 -- badge-local units to shift ALL columns LEFT when
                             -- and would cover our badges. Visually tuned.
 local BACKPACK_BOTTOM_EXTRA = 20 -- extra badge-local units added to the columns-2+ bottom reserve when an
                                  -- INTEGRATED backpack is equipped (the bottom inventory bar grows taller).
-local moisture_active = false -- client-local: is the game's moisture (rain) meter currently popped up (owner moisture > 0)? When true, column 0 is pushed down to dodge it.
+local second_row_active = false -- client-local: is a LOW second-row badge (moisture/rain meter, Wendy's Abigail pet-health, or Wigfrid's inspiration) present in the top-right status cluster? When true, column 0's top is pushed down to dodge it.
 local last_bpmode = -1 -- client-local: last applied backpack UI mode (see backpack_layout_mode); a 0.5s poll re-lays-out on change (right-click open/close + the integrated-backpack setting toggle fire NO event).
 
 --imports partybadge
@@ -169,6 +169,20 @@ local function backpack_layout_mode()
 	return integrated and 2 or 1
 end
 
+-- v2026.8: does the top-right status cluster have a LOW second-row badge that pushes its bottom into
+-- where col 0's top sits? That band holds the moisture (rain) meter (when wet), Wendy's Abigail
+-- pet-health badge, and Wigfrid's inspiration badge (game y -115 / -100 / -130). `sd` is the vanilla
+-- StatusDisplays widget (our postconstruct's self); pethealthbadge/inspirationbadge are non-nil only
+-- for those characters. Boat/mightiness/pet-hunger/wereness sit in the normal cluster height -> ignored.
+local function status_second_row(sd)
+    if sd == nil then return false end
+    local p = sd.owner
+    if p ~= nil and p.GetMoisture ~= nil and (p:GetMoisture() or 0) > 0 then return true end
+    if sd.pethealthbadge ~= nil then return true end
+    if sd.inspirationbadge ~= nil then return true end
+    return false
+end
+
 -- Position every badge. Vertical layout wraps into columns sized by the live screen height.
 local function layout_badges(badgearray)
 	if badgearray == nil then return end
@@ -202,9 +216,10 @@ local function layout_badges(badgearray)
 	--  * Columns 1+ (further LEFT): no moisture meter above and no Map button below them, so they start at
 	--    the normal top y AND extend nearly to the screen bottom (only the small VERT_BOTTOM_RESERVE_FREE
 	--    margin). => taller columns. This is why col 0 is intentionally shorter than the later columns.
-	-- Mode A shifted col 0 LEFT, off the moisture meter too, so it no longer needs the moisture top gap
-	-- there -- align col 0's top with the other columns. Only apply the moisture push when NOT in Mode A.
-	local col0_y    = (moisture_active and bpmode ~= 1) and (vstarty - MOISTURE_TOP_RESERVE) or vstarty
+	-- Mode A shifted col 0 LEFT, off the moisture / pet-health / inspiration band too, so it no longer
+	-- needs the second-row top gap there -- align col 0's top with the other columns. Only apply the push
+	-- when NOT in Mode A.
+	local col0_y    = (second_row_active and bpmode ~= 1) and (vstarty - MOISTURE_TOP_RESERVE) or vstarty
 	-- columns 2+ free reserve: integrated backpack (Mode B) adds extra bottom keep-out for the taller bar.
 	local free = VERT_BOTTOM_RESERVE_FREE + ((bpmode == 2) and BACKPACK_BOTTOM_EXTRA or 0)
 	-- col 0 reserve: in Mode A it's been shifted left OFF the Map(M) button, so it can extend down like the
@@ -237,21 +252,21 @@ local function onstatusdisplaysconstruct(self)
 		self.badgearray[i]:SetHPNumberAlways(hp_number_always)
 	end
 
-	-- v2026.8: track the game's moisture (rain) meter so column 0 can dodge it (it sits where our
-	-- first column's top would be). moisturedelta fires on the owner on every moisture change; only
-	-- re-layout when the meter's shown/hidden state actually toggles (crosses 0). Registered on
-	-- self.inst with self.owner as source so Widget:Kill tears it down with the HUD.
+	-- v2026.8: track the top-right cluster's LOW second-row band (moisture/rain meter, Wendy's Abigail
+	-- pet-health, Wigfrid's inspiration -- see status_second_row) so column 0 can dodge it (it sits where
+	-- our first column's top would be). moisturedelta fires on the owner on every moisture change; only
+	-- re-layout when the second-row presence actually toggles. Registered on self.inst with self.owner as
+	-- source so Widget:Kill tears it down with the HUD.
 	if self.inst ~= nil and self.owner ~= nil then
-		moisture_active = (self.owner.GetMoisture ~= nil and (self.owner:GetMoisture() or 0) > 0) or false
-		local function refresh_moisture_layout()
-			local m = (self.owner ~= nil and self.owner.GetMoisture ~= nil and self.owner:GetMoisture()) or 0
-			local active = m > 0
-			if active ~= moisture_active then
-				moisture_active = active
+		second_row_active = status_second_row(self)
+		local function refresh_second_row_layout()
+			local a = status_second_row(self)
+			if a ~= second_row_active then
+				second_row_active = a
 				layout_badges(self.badgearray)
 			end
 		end
-		self.inst:ListenForEvent("moisturedelta", refresh_moisture_layout, self.owner)
+		self.inst:ListenForEvent("moisturedelta", refresh_second_row_layout, self.owner)
 	end
 
 	-- v2026.8: re-layout when a backpack is equipped/unequipped on the BODY slot (Mode A shifts the
@@ -275,8 +290,10 @@ local function onstatusdisplaysconstruct(self)
 	if self.inst ~= nil and self.inst.DoPeriodicTask ~= nil then
 		self.inst:DoPeriodicTask(0.5, function()
 			local m = backpack_layout_mode()
-			if m ~= last_bpmode then
+			local s = status_second_row(self)
+			if m ~= last_bpmode or s ~= second_row_active then
 				last_bpmode = m
+				second_row_active = s
 				layout_badges(self.badgearray)
 			end
 		end)
