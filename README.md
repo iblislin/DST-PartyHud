@@ -38,6 +38,9 @@ A modernized fork of [PartyHUD](https://github.com/brianchenito/PartyHud) by **b
 - **Backpack-aware**: when a separate (non-integrated) backpack is open on the right, the whole HUD shifts left to clear it; with the **Integrated Backpack** option on, the columns reserve extra bottom space for the taller inventory bar. Reacts instantly as you open/close, equip/unequip, or **swap one open backpack for another**.
 - New per-player options: **Show Cross-Shard Teammates** and a **[Test] Show mock badges** preview toggle. (Console helper `PartyHud_Layout()` switches Vertical/Horizontal live for debugging.)
 
+### Fixed in 2026.9
+- **Fixed a server crash** that hit a caves-enabled (two-shard) server when a player joined: a 2026.8 internal change called a function that isn't available in the mod's restricted environment, crashing the master shard once the cross-shard broadcast started. No gameplay/visual change — purely the crash fix. (If you ran 2026.8 on a caves cluster, update to 2026.9.)
+
 ## Install (server mod)
 Subscribe on the Workshop, **or** place this folder into your server's `mods/` as `partyhud` and enable it in each shard's `modoverrides.lua`:
 ```lua
@@ -116,6 +119,13 @@ to work on current Don't Starve Together builds.
     with the Integrated Backpack option; reacts instantly to open/close, equip/unequip, and pack swap
 [/list]
 
+[b]Fixed in 2026.9[/b]
+[list]
+[*] Fixed a server crash on caves-enabled (two-shard) servers that triggered when a player joined
+    (a 2026.8 internal change used a function unavailable in the mod sandbox). No gameplay change;
+    update to 2026.9 if you ran 2026.8 with caves.
+[/list]
+
 [b]Settings (each player picks their own)[/b]
 [list]
 [*] HUD Layout: Horizontal / Vertical
@@ -184,6 +194,12 @@ Thanks for the original work!
     死亡玩家的骷髏圖示現在置中
 [*] 背包感知:開啟側邊背包時整個 HUD 左移讓位,或在「整合式背包」選項下保留底部空間;
     開關背包、裝備/卸下、甚至交換背包都會即時反應
+[/list]
+
+[b]2026.9 修正[/b]
+[list]
+[*] 修正在有洞穴(雙 shard)的伺服器上、玩家加入時造成的伺服器 crash(2026.8 的內部變更用到了
+    mod 沙箱環境沒有的函式)。無玩法/視覺變更;若你在 2026.8 開了洞穴,請更新到 2026.9。
 [/list]
 
 [b]設定(每位玩家各自選擇)[/b]

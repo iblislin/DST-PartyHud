@@ -89,7 +89,13 @@ Pair each with the matching section of `references/dst-runtime-gotchas.md`.
    `false`/`nil` (it falls through to `Y`); `0` and `""` are truthy. Accidental globals;
    `local function` referenced before its declaration (captures nil/global); closures capturing
    a loop variable; `string.format` arg/type mismatch and `..` with nil/table; `tonumber`/
-   `tostring` on nil; division by zero; multi-return used mid-arglist.
+   `tostring` on nil; division by zero; multi-return used mid-arglist. **modmain sandbox env:**
+   `modmain.lua` runs in a restricted env that whitelists only some standard globals (`tostring`,
+   `pairs`, `ipairs`, `print`, `math`, `table`, `type`, `string`, `require`) — a bare call to a
+   NON-whitelisted global (notably **`tonumber`**, also `pcall`/`error`/`assert`/`select`/
+   `setmetatable`/`unpack`/…) is nil → runtime "attempt to call global 'X'" that luacheck+loadfile
+   miss. Use `GLOBAL.X`. (Required `scripts/*` modules get the full env, so it's a modmain-only
+   trap.) See references Language-baseline note + §11.
 
 5. **Event / listener lifecycle.** Double-registration (a per-entity postinit vs a per-HUD
    postconstruct); listeners that leak across HUD/entity rebuilds; callbacks/`DoTaskInTime`
@@ -138,3 +144,10 @@ State plainly what this audit does and does NOT cover. It does not replace: runn
 gates, and — when an assumption the mod relies on is non-obvious or could be broken by a future
 game update — suggest recording it as an inline "INVARIANTS" comment in the mod so the next
 maintainer (or game patch) is flagged.
+
+**The load-smoke does NOT exercise sim-tick code** (a hard lesson from the v2026.9 incident — see
+references §12.4). With no players, `pause_when_empty=true` freezes the sim, so any
+`DoPeriodicTask`/`DoTaskInTime`/per-tick logic never runs and a latent crash in it (e.g. the bare
+`tonumber`) passes the smoke, then detonates the moment a player connects. If the mod adds or
+changes any periodic/tick task, the smoke is not enough — temporarily `pause_when_empty=false`
+(or connect a client) and watch for several task periods, or in-game test with a real player.

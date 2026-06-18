@@ -15,6 +15,18 @@ Several gotchas below follow directly from 5.1 semantics:
   strict weak ordering** (irreflexive) or it errors (§3, §8).
 - No `goto`/`_ENV` (5.2), no integer `//` or bitwise operators (5.3); `os`/`io`/arbitrary
   `require` are restricted in the mod sandbox (use `modimport`/`GLOBAL`, not raw `require`).
+- **`modmain.lua` runs in a RESTRICTED sandbox env, NOT the full `_G`.** The env (`mods.lua`,
+  the `env = { ... }` table, ~:305-330 in a 2026 build) whitelists only a handful of standard
+  globals — verified present: `pairs, ipairs, print, math, table, type, string, tostring, require`
+  — and crucially **`tonumber` is NOT in it** (nor are `pcall`, `error`, `assert`, `select`,
+  `setmetatable`, `next`, `rawget/rawset`, `unpack`, `os`, `io`, etc.). A bare reference to a
+  non-whitelisted global in modmain resolves to **nil**, so *calling* it (`tonumber(x)`) throws
+  "attempt to call global 'X' (a nil value)" **at runtime**, not load time — `luacheck`
+  (std=lua51) and `loadfile` both think it's fine. Fix: prefix with `GLOBAL.` (`GLOBAL.tonumber`,
+  `GLOBAL.pcall`, …). NOTE the asymmetry that makes this easy to miss: **required modules**
+  (`scripts/*.lua` pulled in via `require`) run in the FULL `_G`, so `tonumber` works *there* —
+  only `modmain.lua`'s own chunk (and `modworldgenmain.lua`) is sandboxed. When auditing modmain,
+  treat every bare standard-global call as suspect unless it's in the whitelist above. → dim 4.
 
 ## Contents
 1. Shard / cave model
@@ -195,12 +207,29 @@ Several gotchas below follow directly from 5.1 semantics:
   return the server shard's id (so a same-shard-far teammate got the cross-shard label). Fix: derive
   "my shard" from the client's OWN record in the broadcast blob (the server stamps every local
   player with this shard's origin) rather than trusting the client-side shard-id API. → dimension 2/6.
+- **Bare `tonumber` in modmain crashed the shard (v2026.9 — shipped, then patched)**: the v2026.8
+  hardening fix for the shard-id-string trap above wrote `tonumber((...GetShardId()) or 0)` in
+  `build_local_records`. But `tonumber` is **not in the modmain sandbox env** (only `tostring` is)
+  → nil → "attempt to call global 'tonumber' (a nil value)" on the master shard. Doubly nasty: (a)
+  it SHIPPED in v2026.8 (luacheck + loadfile + the 6-dimension audit all passed — the audit even
+  *recommended* the `tonumber` fix without flagging the sandbox); (b) it stayed hidden through
+  every load-smoke because the crash is in the 0.5 s broadcast `DoPeriodicTask`, which only fires
+  when the sim is unpaused, i.e. with a player online — and `pause_when_empty` keeps the sim frozen
+  in any no-player smoke test. It surfaced the instant a friend joined. Fix: `GLOBAL.tonumber`; ship
+  as a patch + hotfix prod in place. → dimension 4 (+ the Language-baseline whitelist note) + §12.4.
 
 ## 12. Testing layers (this audit is one of four gates)
 1. **luacheck** — load-time only (syntax / undefined & accidental globals). Cheap first gate.
 2. **This crash-safety audit** — the runtime bug classes luacheck can't see.
 3. **Dedicated-server load smoke test** — boot an isolated throwaway server, load the mod, gen a
    world, assert mod-registered + no Lua errors. Catches bad `require`/missing-API/startup crash.
+   **CAUTION — a load-smoke does NOT exercise sim-tick code.** With no players connected, a server
+   with `pause_when_empty = true` (the common default) freezes the sim, so `DoPeriodicTask` /
+   `DoTaskInTime` / per-tick handlers **never run** — "0 LUA errors at boot" says nothing about the
+   safety of a periodic broadcast/poll task. A latent crash in such a task (e.g. the v2026.9 bare
+   `tonumber`) sails through the smoke and detonates the moment a real player joins. To actually
+   exercise tick code without a second human: temporarily set `pause_when_empty = false` (or connect
+   a client), then watch for ≥ several task periods before declaring it safe.
 4. **Multi-player + 2-shard in-game test** — real join/leave/death/cave-migration behaviour. The
    only thing that exercises the client widgets, the netvar round-trip, and the shard paths.
 Audit findings about behaviour (not just load) ultimately need gate 4 to confirm.
