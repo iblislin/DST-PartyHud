@@ -104,6 +104,11 @@ local crossshard = _G.require("partyhud_crossshard")
 -- pure status-display decisions (sanity rate arrow incl. the sleep special-case) -- forward-required
 -- since compute_sanity_ratescale below is a server hook defined before the server-side require block.
 local statuslogic = _G.require("partyhud_status")
+-- pure record normalization (local + foreign badge-arg clamps/defaults/rescale) -- forward-required
+-- since UpdateBadges (defined inside onstatusdisplaysconstruct above the later require blocks) uses it;
+-- a local declared later in the chunk is NOT an upvalue of that earlier closure (would resolve to a
+-- nil global and crash the render path). Same forward-require discipline as layoutmath/crossshard/statuslogic.
+local record = _G.require("partyhud_record")
 local get_client_foreign_records -- forward decl; assigned where the client store lives (see below)
 
 if positional == 0 then -- standard with minimap
@@ -467,35 +472,34 @@ local function onstatusdisplaysconstruct(self)
       end
       local v = players[i]
       if v ~= nil then
-        -- real player: show live HP/hunger/sanity/fire/temperature
-        local isdead = (v.customisdead ~= nil and v.customisdead:value()) or false
-        local hpcur = (v.customhpbadgepercent ~= nil and v.customhpbadgepercent:value()) or 0
-        local maxhp = (v.customhpbadgemax ~= nil and v.customhpbadgemax:value()) or 0
-        local hppenalty = (v.customhpbadgedebuff ~= nil and v.customhpbadgedebuff:value() / 100) or 0
-        local hunger = (v.customhunger ~= nil and v.customhunger:value()) or 0
-        local hungermax = (v.customhungermax ~= nil and v.customhungermax:value()) or 100
-        local sanity = (v.customsanity ~= nil and v.customsanity:value()) or 0
-        local sanitymax = (v.customsanitymax ~= nil and v.customsanitymax:value()) or 100
-        local sanitypenalty = (v.customsanitydebuff ~= nil and v.customsanitydebuff:value() / 100) or 0
-        local onfire = (v.customonfire ~= nil and v.customonfire:value()) or false
-        local overheating = (v.customoverheating ~= nil and v.customoverheating:value()) or false
-        local freezing = (v.customfreezing ~= nil and v.customfreezing:value()) or false
-        if hungermax <= 0 then
-          hungermax = 100
-        end
-        if sanitymax <= 0 then
-          sanitymax = 100
-        end
+        -- real player: show live HP/hunger/sanity/fire/temperature. Read each netvar (engine state
+        -- stays in modmain), then DELEGATE the clamp/default arithmetic to record.normalize_local
+        -- (pure, busted-tested). The non-positive hunger-max / sanity-max -> 100 clamps now live in
+        -- the module; the per-netvar read-time `or` defaults stay here.
+        local n = record.normalize_local({
+          isdead = (v.customisdead ~= nil and v.customisdead:value()) or false,
+          hpcur = (v.customhpbadgepercent ~= nil and v.customhpbadgepercent:value()) or 0,
+          maxhp = (v.customhpbadgemax ~= nil and v.customhpbadgemax:value()) or 0,
+          hppenalty = (v.customhpbadgedebuff ~= nil and v.customhpbadgedebuff:value() / 100) or 0,
+          hunger = (v.customhunger ~= nil and v.customhunger:value()) or 0,
+          hungermax = (v.customhungermax ~= nil and v.customhungermax:value()) or 100,
+          sanity = (v.customsanity ~= nil and v.customsanity:value()) or 0,
+          sanitymax = (v.customsanitymax ~= nil and v.customsanitymax:value()) or 100,
+          sanitypenalty = (v.customsanitydebuff ~= nil and v.customsanitydebuff:value() / 100) or 0,
+          onfire = (v.customonfire ~= nil and v.customonfire:value()) or false,
+          overheating = (v.customoverheating ~= nil and v.customoverheating:value()) or false,
+          freezing = (v.customfreezing ~= nil and v.customfreezing:value()) or false,
+          sanityrate = (v.customsanityrate ~= nil and v.customsanityrate:value()) or 0,
+        })
         if v.userid ~= nil and v.userid ~= "" then
           local_userids[v.userid] = true
         end
         b:SetForeign(false) -- this slot is a LOCAL player: reset any "elsewhere" treatment
         b:SetName(v:GetDisplayName())
-        b:SetPercent(hpcur, maxhp, hppenalty)
-        b:SetStatus(hunger, hungermax, sanity, sanitymax, onfire, overheating, freezing, sanitypenalty)
-        local sanityrate = (v.customsanityrate ~= nil and v.customsanityrate:value()) or 0
-        b:SetSanityRate(sanityrate)
-        if isdead then
+        b:SetPercent(n.hpcur, n.maxhp, n.hppenalty)
+        b:SetStatus(n.hunger, n.hungermax, n.sanity, n.sanitymax, n.onfire, n.overheating, n.freezing, n.sanitypenalty)
+        b:SetSanityRate(n.sanityrate)
+        if n.isdead then
           b:ShowDead()
         else
           b:ShowBadge()
@@ -544,8 +548,9 @@ local function onstatusdisplaysconstruct(self)
       end
 
       -- This client's shard determines the label for the foreign one (2-shard cluster): if we
-      -- are in the Caves the others are on the Surface, and vice versa.
-      local foreign_label = (_G.TheWorld ~= nil and _G.TheWorld:HasTag("cave")) and "Surface" or "Caves"
+      -- are in the Caves the others are on the Surface, and vice versa. The pure ternary lives in
+      -- crossshard.foreign_label; modmain keeps the TheWorld tag read.
+      local is_cave = (_G.TheWorld ~= nil and _G.TheWorld:HasTag("cave")) or false
       -- this client's own shard id (NUMBER, matching the codec v2 `origin` field). A foreign
       -- record whose origin == my_shard is a SAME-shard teammate that fell out of network
       -- view-range -- rendered "far" rather than with the cross-shard label below.
@@ -572,35 +577,36 @@ local function onstatusdisplaysconstruct(self)
           if b == nil then
             break
           end
-          -- foreign records carry no hunger MAX, only the current hunger value -- default the
-          -- scale so the ring still reads sensibly (matches the local-path hungermax<=0 default).
-          local hungermax = 100
-          local sanitymax = (rec.sanity_max ~= nil and rec.sanity_max > 0) and rec.sanity_max or 100
+          -- unpack the dead flag here (engine-free codec call); the rest of the foreign clamps /
+          -- defaults / penalty-rescale + the forced-neutral thermal flags & sanity rate are delegated
+          -- to record.normalize_foreign (pure, busted-tested). hunger-max is HARD 100 there (foreign
+          -- records carry none), and fire/overheat/freeze + rate are forced false/0 (~1s-stale data).
           local flags = codec_client.unpackflags(rec.flags)
-          -- origin nil/0 (a v1 peer, or unresolved shard) -> same_shard false -> cross-shard
-          -- label, preserving pre-v2 behaviour.
-          local same_shard = crossshard.is_same_shard(rec.origin, my_shard)
+          local n = record.normalize_foreign(rec, flags)
+          -- origin nil/0 (a v1 peer, or unresolved shard) -> same_shard false -> cross-shard label,
+          -- preserving pre-v2 behaviour. The pure decision lives in crossshard.badge_treatment.
+          local same_shard, label = crossshard.badge_treatment(rec.origin, my_shard, is_cave)
           if same_shard then
             b:SetForeign(true, nil, true) -- same-shard out-of-view -> dimmed + "far"
           else
-            b:SetForeign(true, foreign_label) -- cross-shard -> "Caves"/"Surface"
+            b:SetForeign(true, label) -- cross-shard -> "Caves"/"Surface"
           end
           b:SetName(namebyuserid[rec.userid] or "?")
-          b:SetPercent(rec.hp_cur or 0, rec.hp_max, (rec.hp_penalty or 0) / 100)
+          b:SetPercent(n.hpcur, n.maxhp, n.hppenalty)
           -- SIMPLIFIED status: hunger/sanity + penalty shown, but NO live thermal pulse for far
           -- players (fire/overheat/freeze forced false -- misleading at ~1s lag).
           b:SetStatus(
-            rec.hunger,
-            hungermax,
-            rec.sanity_cur,
-            sanitymax,
-            false,
-            false,
-            false,
-            (rec.sanity_penalty or 0) / 100
+            n.hunger,
+            n.hungermax,
+            n.sanity,
+            n.sanitymax,
+            n.onfire,
+            n.overheating,
+            n.freezing,
+            n.sanitypenalty
           )
-          b:SetSanityRate(0) -- neutral: no rate arrow for far players
-          if flags.dead then
+          b:SetSanityRate(n.sanityrate) -- neutral 0: no rate arrow for far players
+          if n.isdead then
             b:ShowDead()
           else
             b:ShowBadge()

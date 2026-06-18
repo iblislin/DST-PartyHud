@@ -447,4 +447,59 @@ describe("partyhud crossshard store", function()
       assert.is_true(store.is_same_shard(338108181, 338108181))
     end)
   end)
+
+  -- ------------------------------------------------------------------
+  describe("foreign_label", function()
+    it("this client in the CAVES -> the others are on the Surface", function()
+      assert.are.equal("Surface", store.foreign_label(true))
+    end)
+
+    it("this client on the SURFACE (not cave) -> the others are in the Caves", function()
+      assert.are.equal("Caves", store.foreign_label(false))
+    end)
+  end)
+
+  -- ------------------------------------------------------------------
+  describe("badge_treatment", function()
+    it("same origin as my_shard -> far (same_shard true, label nil)", function()
+      local same, label = store.badge_treatment(1, 1, false)
+      assert.is_true(same)
+      assert.is_nil(label)
+    end)
+
+    it("different origin -> cross-shard label (same_shard false)", function()
+      local same, label = store.badge_treatment(2, 1, false)
+      assert.is_false(same)
+      assert.are.equal("Caves", label) -- not a cave -> label names the Caves
+    end)
+
+    it("different origin while in the caves -> the Surface label", function()
+      local same, label = store.badge_treatment(2, 1, true)
+      assert.is_false(same)
+      assert.are.equal("Surface", label)
+    end)
+
+    -- The load-bearing edge: a v1 peer broadcasts records with origin == nil. It must NOT be
+    -- treated as "far" (which would hide the shard name) -- it falls to the cross-shard label,
+    -- preserving pre-v2 behaviour.
+    it("NIL origin (v1 peer) -> cross-shard label, NEVER far", function()
+      local same, label = store.badge_treatment(nil, 1, false)
+      assert.is_false(same)
+      assert.are.equal("Caves", label)
+    end)
+
+    it("nil origin while in the caves -> cross-shard Surface label, never far", function()
+      local same, label = store.badge_treatment(nil, 1, true)
+      assert.is_false(same)
+      assert.are.equal("Surface", label)
+    end)
+
+    -- my_shard unresolved (nil, before the first carrier blob carrying ThePlayer arrives): also
+    -- falls to the cross-shard label, never far. Self-corrects on a later refresh.
+    it("nil my_shard (unresolved) -> cross-shard label, never far", function()
+      local same, label = store.badge_treatment(2, nil, false)
+      assert.is_false(same)
+      assert.are.equal("Caves", label)
+    end)
+  end)
 end)

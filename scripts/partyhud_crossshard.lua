@@ -191,4 +191,28 @@ function M.is_same_shard(rec_origin, my_shard)
   return (my_shard ~= nil and rec_origin ~= nil and rec_origin == my_shard)
 end
 
+-- v2026.11 (extracted for test): the cross-shard label this client shows on a FOREIGN teammate's badge,
+-- in a 2-shard (surface + caves) cluster. The label names the OTHER shard: if THIS client is in the
+-- caves the others are on the surface, and vice versa. `is_cave` is `TheWorld:HasTag("cave")`.
+function M.foreign_label(is_cave)
+  return is_cave and "Surface" or "Caves"
+end
+
+-- v2026.11 (extracted for test): decide how to treat a foreign badge.
+--   rec_origin : the foreign record's origin shard id (number, or nil for a v1 peer / unresolved)
+--   my_shard   : this client's own shard id (number, or nil until the first carrier blob arrives)
+--   is_cave    : TheWorld:HasTag("cave"), used to pick the cross-shard label
+-- Returns (same_shard, label):
+--   * same_shard true (origin known and == my_shard) -> a SAME-shard teammate out of network
+--     view-range: render "far" with NO shard label (label nil; the badge supplies the "far" text).
+--   * otherwise -> a cross-shard teammate (DIFFERENT shard) OR a v1 peer with nil origin OR an
+--     unresolved my_shard: render with the cross-shard foreign_label ("Caves"/"Surface"). A nil
+--     origin (v1 peer) deliberately falls here, NEVER to "far", preserving pre-v2 behaviour.
+function M.badge_treatment(rec_origin, my_shard, is_cave)
+  if M.is_same_shard(rec_origin, my_shard) then
+    return true, nil
+  end
+  return false, M.foreign_label(is_cave)
+end
+
 return M
