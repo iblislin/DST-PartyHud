@@ -33,9 +33,10 @@ A modernized fork of [PartyHUD](https://github.com/brianchenito/PartyHud) by **b
 - **See teammates on the other shard** (Caves ↔ Surface) and same-shard teammates who are out of network range — players who previously had no badge at all. Their status is relayed over an always-networked broadcast and refreshed ~2×/second.
 - Far-away teammates render **dimmed with a "Caves" / "Surface" label** to signal the data is slightly delayed; a local teammate always wins, so nobody is drawn twice mid-migration.
 - **Fixed the column count on resized / small windows** — the vertical layout used to collapse every column to a single badge on a small window; it now accounts for the HUD's proportional scaling, so per-column count stays stable at any resolution.
-- **Per-column heights**: only the rightmost column reserves space for the game's Map (M) button; the other columns extend nearly to the screen bottom. The first column also **dodges the rain (moisture) meter** when it pops up.
-- **Backpack-aware**: when a separate (non-integrated) backpack is open on the right, the whole HUD shifts left to clear it; with the **Integrated Backpack** option on, the columns reserve extra bottom space for the taller inventory bar. Reacts as you open/close or equip/unequip the pack.
-- New per-player options: **Show Cross-Shard Teammates** and a **[Test] Show mock badges** preview toggle.
+- **Per-column heights**: only the rightmost column reserves space for the game's Map (M) button; the other columns extend nearly to the screen bottom.
+- **Stays clear of the game's own UI**: the columns dodge the **rain (moisture) meter** and character status badges (**Wendy's Abigail**, **Wigfrid's inspiration**) when they appear below the status cluster — including the wider two-column case — and the dead-player **skull icon is now centred** on the badge.
+- **Backpack-aware**: when a separate (non-integrated) backpack is open on the right, the whole HUD shifts left to clear it; with the **Integrated Backpack** option on, the columns reserve extra bottom space for the taller inventory bar. Reacts instantly as you open/close, equip/unequip, or **swap one open backpack for another**.
+- New per-player options: **Show Cross-Shard Teammates** and a **[Test] Show mock badges** preview toggle. (Console helper `PartyHud_Layout()` switches Vertical/Horizontal live for debugging.)
 
 ## Install (server mod)
 Subscribe on the Workshop, **or** place this folder into your server's `mods/` as `partyhud` and enable it in each shard's `modoverrides.lua`:
