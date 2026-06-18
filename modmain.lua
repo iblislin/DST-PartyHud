@@ -59,7 +59,7 @@ local VERT_GAP  = -120 -- gap between badges (negative = each next one goes DOWN
                        -- name no longer overlaps the hunger/sanity sub-rings of the badge above)
 local VERT_GAP_COMPACT = -90 -- tighter gap for the HP-only (no sub-rings) badge; pre-sub-ring spacing
 local VERT_COL_W = 80  -- horizontal spacing when the column wraps to a new one (see compute_percol)
-local VERT_BOTTOM_RESERVE = 120 -- badge-local units kept clear at the bottom for the game's map(M)
+local VERT_BOTTOM_RESERVE = 80 -- badge-local units kept clear at the bottom for the game's map(M)
                                 -- button. FIXED (not per-row): the compact gap is tighter, so a
                                 -- per-row reserve would pack an extra badge into the button. Larger
                                 -- = wraps a column one badge sooner.
@@ -68,6 +68,11 @@ local VERT_BOTTOM_RESERVE_FREE = 40 -- bottom keep-out for columns 2+ (further L
                                     -- column, so later columns have a clear bottom and extend nearly to
                                     -- the screen edge (just this small margin). Smaller = reach further down.
 local MOISTURE_TOP_RESERVE = 75 -- badge-local units to push the FIRST column's top DOWN when the game's moisture (rain) meter is showing, so our column 0 doesn't cover it. Visually tuned.
+local BACKPACK_SHIFT_X = 90 -- badge-local units to shift ALL columns LEFT when a NON-integrated (side)
+                            -- backpack is equipped: its floating container hugs the right screen edge
+                            -- and would cover our badges. Visually tuned.
+local BACKPACK_BOTTOM_EXTRA = 20 -- extra badge-local units added to the columns-2+ bottom reserve when an
+                                 -- INTEGRATED backpack is equipped (the bottom inventory bar grows taller).
 local moisture_active = false -- client-local: is the game's moisture (rain) meter currently popped up (owner moisture > 0)? When true, column 0 is pushed down to dodge it.
 
 --imports partybadge
@@ -146,6 +151,19 @@ local function compute_percol(vy, bottom_reserve)
 	return n
 end
 
+-- v2026.8: which backpack UI is active for the LOCAL player? 0=none, 1=side floating (covers our
+-- right-side badges), 2=integrated (taller bottom inventory bar). Client-only; everything nil-guarded.
+local function backpack_layout_mode()
+	local p = _G.ThePlayer
+	if p == nil or p.replica == nil or p.replica.inventory == nil then return 0 end
+	local eslot = (_G.EQUIPSLOTS ~= nil and _G.EQUIPSLOTS.BODY) or "body"
+	local body = p.replica.inventory:GetEquippedItem(eslot)
+	if body == nil or body.replica == nil or body.replica.container == nil then return 0 end
+	local integrated = (_G.TheInput ~= nil and _G.TheInput:ControllerAttached())
+		or (_G.Profile ~= nil and _G.Profile.GetIntegratedBackpack ~= nil and _G.Profile:GetIntegratedBackpack())
+	return integrated and 2 or 1
+end
+
 -- Position every badge. Vertical layout wraps into columns sized by the live screen height.
 local function layout_badges(badgearray)
 	if badgearray == nil then return end
@@ -162,6 +180,14 @@ local function layout_badges(badgearray)
 	local vstartx, vstarty = VERT_X, VERT_Y
 	if positional==0 or positional==1 then vstartx, vstarty = phud_xpos, phud_ypos end
 	local vgap = show_substatus and VERT_GAP or VERT_GAP_COMPACT -- effective gap (tighter when sub-rings hidden)
+	-- v2026.8: an equipped backpack overlaps our HUD differently per UI mode (see backpack_layout_mode):
+	--  * Mode A (1, side/floating): its container hugs the right screen edge over our badges -> shift ALL
+	--    columns LEFT (done here, before per-column x is computed). That moves col 0 off the Map(M) button,
+	--    so col 0 then uses the small `free` reserve like the other columns instead of the full Map reserve.
+	--  * Mode B (2, integrated): the bottom inventory bar grows taller -> reserve extra bottom space on the
+	--    columns-2+ `free` keep-out (those columns extend toward the screen bottom).
+	local bpmode = backpack_layout_mode()
+	if bpmode == 1 then vstartx = vstartx - BACKPACK_SHIFT_X end
 	-- v2026.8: each column's available height differs by its on-screen obstacles, so capacities are
 	-- computed PER COLUMN (they are no longer uniform):
 	--  * Column 0 (rightmost): the game's moisture (rain) meter sits right below the sanity badge --
@@ -172,8 +198,13 @@ local function layout_badges(badgearray)
 	--    the normal top y AND extend nearly to the screen bottom (only the small VERT_BOTTOM_RESERVE_FREE
 	--    margin). => taller columns. This is why col 0 is intentionally shorter than the later columns.
 	local col0_y    = moisture_active and (vstarty - MOISTURE_TOP_RESERVE) or vstarty
-	local col0_cap  = compute_percol(col0_y, VERT_BOTTOM_RESERVE)       -- top dodges moisture; bottom reserves Map(M)
-	local other_cap = compute_percol(vstarty, VERT_BOTTOM_RESERVE_FREE) -- full top, extends to screen bottom
+	-- columns 2+ free reserve: integrated backpack (Mode B) adds extra bottom keep-out for the taller bar.
+	local free = VERT_BOTTOM_RESERVE_FREE + ((bpmode == 2) and BACKPACK_BOTTOM_EXTRA or 0)
+	-- col 0 reserve: in Mode A it's been shifted left OFF the Map(M) button, so it can extend down like the
+	-- others (use `free`); otherwise it still sits over the button, so keep the full Map keep-out.
+	local col0_reserve = (bpmode == 1) and free or VERT_BOTTOM_RESERVE
+	local col0_cap  = compute_percol(col0_y, col0_reserve)             -- top dodges moisture; bottom reserves Map(M) (or `free` in Mode A)
+	local other_cap = compute_percol(vstarty, free)                   -- full top, extends to screen bottom
 	for i = 1, #badgearray do
 		local col, row, ystart
 		if i <= col0_cap then
@@ -214,6 +245,20 @@ local function onstatusdisplaysconstruct(self)
 			end
 		end
 		self.inst:ListenForEvent("moisturedelta", refresh_moisture_layout, self.owner)
+	end
+
+	-- v2026.8: re-layout when a backpack is equipped/unequipped on the BODY slot (Mode A shifts the
+	-- columns left; Mode B reserves more bottom space). Bound to self.inst with self.owner as source so
+	-- it's torn down with the HUD. The integrated-backpack SETTING toggle pushes no event, but the other
+	-- refreshes (moisture/presence/refreshhudsize/DoTaskInTime) re-call layout_badges and re-evaluate.
+	if self.inst ~= nil and self.owner ~= nil then
+		local function on_equip_changed(_, data)
+			if data == nil or data.eslot == nil or data.eslot == ((_G.EQUIPSLOTS ~= nil and _G.EQUIPSLOTS.BODY) or "body") then
+				layout_badges(self.badgearray)
+			end
+		end
+		self.inst:ListenForEvent("equip", on_equip_changed, self.owner)
+		self.inst:ListenForEvent("unequip", on_equip_changed, self.owner)
 	end
 
 	-- Lay out now (best-effort), then again next frame: this postconstruct runs BEFORE
