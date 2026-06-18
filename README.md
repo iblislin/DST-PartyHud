@@ -29,6 +29,14 @@ A modernized fork of [PartyHUD](https://github.com/brianchenito/PartyHud) by **b
 - The **sanity arrow now rises while a teammate is sleeping** (matching the game)
 - More robust ghost / dead state and join / leave / cave-migration handling
 
+### New in 2026.8 — cross-shard teammates + layout polish
+- **See teammates on the other shard** (Caves ↔ Surface) and same-shard teammates who are out of network range — players who previously had no badge at all. Their status is relayed over an always-networked broadcast and refreshed ~2×/second.
+- Far-away teammates render **dimmed with a "Caves" / "Surface" label** to signal the data is slightly delayed; a local teammate always wins, so nobody is drawn twice mid-migration.
+- **Fixed the column count on resized / small windows** — the vertical layout used to collapse every column to a single badge on a small window; it now accounts for the HUD's proportional scaling, so per-column count stays stable at any resolution.
+- **Per-column heights**: only the rightmost column reserves space for the game's Map (M) button; the other columns extend nearly to the screen bottom. The first column also **dodges the rain (moisture) meter** when it pops up.
+- **Backpack-aware**: when a separate (non-integrated) backpack is open on the right, the whole HUD shifts left to clear it; with the **Integrated Backpack** option on, the columns reserve extra bottom space for the taller inventory bar. Reacts as you open/close or equip/unequip the pack.
+- New per-player options: **Show Cross-Shard Teammates** and a **[Test] Show mock badges** preview toggle.
+
 ## Install (server mod)
 Subscribe on the Workshop, **or** place this folder into your server's `mods/` as `partyhud` and enable it in each shard's `modoverrides.lua`:
 ```lua
@@ -41,6 +49,9 @@ Connecting players download it automatically. _(If you grab a GitHub source arch
 - **HUD Position:** Minimap / Minimap XL / Standard
 - **Show Your Own Badge:** Show / Skip (skip it — you already have your own status meters)
 - **Hunger/Sanity Sub-gauges:** Show / Hide (hide for a compact HP-only badge)
+- **Show Cross-Shard Teammates:** Show / Hide (teammates on the other shard or out of view range; on by default)
+- **HP Number:** Always / On hover
+- **[Test] Show mock badges:** fills empty slots with fake teammates to preview the layout (only you see it; default off)
 
 ## Credits & License
 Original PartyHUD by **brianchenito**, released into the public domain under [The Unlicense](LICENSE). Attribution is not required, but kept here with thanks for the original work.
