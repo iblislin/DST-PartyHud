@@ -1,6 +1,6 @@
 ---
 name: dst-badge-visual-audit
-description: Visual-parity review for Don't Starve Together (DST) mod HUD / badge / status-widget code. Use this WHENEVER you add or change a custom Badge, UIAnim overlay, status meter, rate arrow, icon, or any HUD widget in a DST mod — and whenever the user reports a widget that "looks wrong", "doesn't match the game UI", "is the wrong colour", "the arrow is too small/big", "the number is covered / unreadable", "the penalty arc is reversed / filling the wrong way", "the badge is invisible", or "the layout overlaps / new column doesn't show". Trigger even when the user just says "review the UI", "check the visuals", or names one symptom (covered number, wrong colour, reversed arc) without saying "audit". Catches the visual-parity bugs that luacheck and the crash-audit CANNOT: wrong build/bank name, wrong tint variant, wrong widget scale, wrong draw order (z-order), penalty/lost-max overlay direction, meter fill direction, layout-timing, and anchor-aware growth.
+description: Visual-parity review for Don't Starve Together (DST) mod HUD / badge / status-widget code. Use this WHENEVER you add or change a custom Badge, UIAnim overlay, status meter, rate arrow, icon, or any HUD widget in a DST mod — and whenever the user reports a widget that "looks wrong", "doesn't match the game UI", "is the wrong colour", "the arrow is too small/big", "the number is covered / unreadable", "the penalty arc is reversed / filling the wrong way", "the badge is invisible", "the layout overlaps / new column doesn't show", "a column collapses to one badge after resizing the window", or "the HUD covers the game's own moisture meter / backpack / status badges". Trigger even when the user just says "review the UI", "check the visuals", or names one symptom (covered number, wrong colour, reversed arc, overlaps a game meter, wrong on resize) without saying "audit". Catches the visual-parity bugs that luacheck and the crash-audit CANNOT: wrong build/bank name, wrong tint variant, wrong widget scale, wrong draw order (z-order), penalty/lost-max overlay direction, meter fill direction, layout-timing, anchor-aware growth, collision with other (conditional) vanilla HUD widgets, and the proportional-HUD-scale wrap miscount.
 ---
 
 # DST Badge / HUD Visual-Parity Audit
@@ -43,6 +43,13 @@ source; do NOT trust wikis or memory for DST widget internals.
      tints, the icon builds.
    - `widgets/statusdisplays.lua` — how those badges are assembled, scaled, and driven
      (`SetHealthPercent`/`SetSanityPercent`, the `health:Max()` + penalty calls).
+   - **For POSITIONING / layout changes** (not just one widget's appearance): `widgets/controls.lua`
+     — the HUD roots, their anchors and the `GetHUDScale()` + `SCALEMODE_PROPORTIONAL` scale chain
+     (`topleft_root`, `bottomright_root`, `containerroot_side`, `bottom_root`) — plus the
+     *conditional* vanilla widgets that share your screen region (moisture meter, side-pack
+     containers, character second-row badges, the Map button). See references §11 (coexistence) +
+     §12 (proportional scale). An exact icon/element PIXEL size (for centring or sizing) is **not**
+     in the scripts — extract it from the game's image bundle per references §13.
 
 For every element you draw, find the vanilla equivalent and diff the construction. The
 [`references/dst-badge-visual-gotchas.md`](references/dst-badge-visual-gotchas.md) file has the
@@ -118,6 +125,23 @@ nested badge needs its own pass.
     — no-increase-at-full — and at empty — no-decrease-at-empty — mirroring the vanilla badge
     OnUpdate guards). A fix that's correct in isolation can break when two states overlap.
 
+11. **Coexistence with OTHER vanilla HUD widgets (positioning)** — *only when your change moves /
+    sizes the HUD near a screen edge.* It must dodge the *other* vanilla widgets in that region,
+    **including conditional ones that pop up** — the rain/moisture meter, an opened side backpack,
+    Wendy's Abigail badge, Wigfrid's inspiration badge — not just the always-present UI you can see
+    while testing. Detect them client-side and shift / reserve space, reacting on the firing events
+    (`equip`/`unequip`, `moisturedelta`) **plus a ~0.5s poll** for state that fires no event
+    (container open/close, the integrated-backpack setting). See references §11 for the verified
+    right-side catalog + per-widget detection signals. (Things that do NOT collide, so don't chase
+    them: bosses, mounts, top-left toasts/desync, the centre scoreboard.)
+
+12. **Proportional HUD scale in wrap / keep-out math** — a column-count or keep-out reserve that
+    converts screen height into widget-local units must divide by the `SCALEMODE_PROPORTIONAL`
+    factor (`min(w/1280, h/720)`, capped at `MAX_HUD_SCALE=1.25`) **as well as** `GetHUDScale()`
+    and the widget's own scale. Omitting it makes the count collapse to a single item (with lots of
+    empty space) on a window smaller than 1280×720, and over-count above 1080p. See references §12.
+    (Distinct from item 8: item 8 is *when* you compute; this is *the formula* you compute.)
+
 ## Red flags (stop and re-check vanilla)
 
 | Symptom | Almost always |
@@ -130,6 +154,9 @@ nested badge needs its own pass.
 | "New column / wrapped item never appears" | Growing toward the anchored edge (off-screen) — item 9 |
 | Layout right at first frame, wrong after, or vice-versa | HUD scale read at construct instead of `DoTaskInTime(0)` / `refreshhudsize` — item 8 |
 | "I reused a base-class `SetPercent`/helper to save code" | The base shortcut rarely matches vanilla's overlay semantics — mirror the vanilla element instead |
+| HUD overlaps a vanilla meter that appears only *sometimes* (rain / opened backpack / Abigail / inspiration) | You positioned against the always-present UI only — account for the *conditional* vanilla widgets — item 11 |
+| Per-column count collapses to 1 (lots of empty space) on a small / resized window | Wrap math omitted the `SCALEMODE_PROPORTIONAL` factor — item 12 |
+| Need an icon's exact pixel size to centre / size it, but it's not in the scripts | It's in the texture atlas — extract `hud.xml` UVs + the `.tex` KTEX dims — references §13 |
 
 ## After the audit — the in-game visual test
 
@@ -146,3 +173,10 @@ Static review + luacheck + a clean dedicated-server load do **not** prove appear
 - A `DEBUG_SHOWALL`-style mock mode that fills slots with synthetic values (including a non-zero
   penalty and each thermal flag) lets you verify every visual state solo, without a second
   player — but confirm it's **off** before shipping.
+- **For coexistence / positioning (item 11)** drive the conditional vanilla widgets from the
+  server console: force rain (`TheWorld:PushEvent("ms_forceprecipitation", true)`) for the
+  moisture meter; give + open a `backpack` for the side panel; toggle the **Integrated Backpack**
+  client setting for the bottom-bar variant; switch to **Wendy** / **Wigfrid** for the
+  Abigail / inspiration second-row badges; and **resize the window** (item 12) to confirm the
+  per-column count stays stable. (Spawn `c_spawn("wilson")` dummies to populate enough badges to
+  actually wrap into the columns you're checking.)

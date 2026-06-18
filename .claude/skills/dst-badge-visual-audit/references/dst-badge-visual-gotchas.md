@@ -16,6 +16,9 @@ trusting these numbers blindly.
 8. Layout timing (HUD scale)
 9. Anchor-aware growth
 10. Multi-state coexistence
+11. Coexistence with OTHER vanilla HUD widgets (positioning / collision)
+12. Proportional HUD scale in layout math (resized-window collapse)
+13. Exact pixel size of an atlas element (not in the Lua scripts)
 
 ---
 
@@ -189,3 +192,80 @@ Each visual state can be correct alone yet break when stacked. Explicitly verify
   hover* and *on top* (§5).
 - **empty / max gauge**: rate arrows should settle to neutral at full (no-increase-at-full) /
   empty (no-decrease-at-empty), mirroring the vanilla badge OnUpdate guards.
+
+## 11. Coexistence with OTHER vanilla HUD widgets (positioning / collision)
+
+Mirroring the widget you imitate (the One Principle) is not enough: a HUD element placed near a
+screen edge must also **dodge the *other* vanilla widgets sharing that region — including
+CONDITIONAL ones that pop up only in certain states.** Positioning only against the
+always-present UI is the trap. The verified RIGHT-side catalog for a right-anchored
+teammate-badge column (file\:line in the current scripts):
+
+- **Top-right status cluster** — `controls.lua` `sidepanel` under `topright_root`
+  (ANCHOR_RIGHT/TOP): the player's own HP/hunger/sanity badges + the clock/moon/season ring
+  (`uiclock.lua`). Always present.
+- **Moisture (rain) meter** — `statusdisplays.lua` `moisturemeter` (y≈-115). Shown only when wet
+  (`MoistureMeter:SetValue` sets `.active` when moisture>0). Detect: `ThePlayer:GetMoisture() > 0`;
+  reacts to the `moisturedelta` event on the player.
+- **Character/state "second-row" badges** in that cluster that extend its BOTTOM into a lower
+  band: **Wendy Abigail pet-health** (`pethealthbadge`, y≈-100) and **Wigfrid inspiration**
+  (`inspirationbadge`, y≈-130). Detect via the vanilla `ThePlayer.HUD.controls.status.<field>`
+  being non-nil (created per-character at HUD construct) or tags (`battlesinger`). NB the others
+  (boat meter y-40; Wolfgang mightiness / Woby pet-hunger / wereness at +20) sit WITHIN the normal
+  cluster height and do NOT push the bottom down — don't dodge them.
+- **Side-container floating panel** — `controls.lua` `containerroot_side` (ANCHOR_RIGHT/MIDDLE,
+  mid-right edge). An equipped body container shown when OPEN: backpack / krampus_sack / piggyback
+  / icepack / spicepack / seedpouch / candybag — all `issidewidget=true` in `containers.lua`, all
+  **2 columns wide** (krampus/seedpouch/candybag are TALLER `2x8` but same width). Detect
+  generically (NOT by prefab name): the BODY-slot item has `.replica.container` AND
+  `:IsOpenedBy(ThePlayer)`. Right-click toggles open/close → **no event** → poll.
+- **Integrated backpack** — `Profile:GetIntegratedBackpack()` (a controller forces it on; OR them).
+  The bottom-center inventory bar grows taller by `(W+YSEP)/2 ≈ 38` inv-local units → reserve extra
+  BOTTOM space, not a side shift.
+- **Map(M) button cluster** — `controls.lua` `bottomright_root` `mapcontrols` (bottom-right):
+  reserve bottom space on the **rightmost column only**.
+- **Does NOT collide** (don't waste effort): boss health bars (none in base DST — festival modes
+  only), mounts/Beefalo (no HUD widget), toasts + the desync/host-perf indicator (top-LEFT),
+  scoreboard (Tab, centre fullscreen).
+
+Detection is client-side. React on the events that fire (`equip`/`unequip` on `ThePlayer` with
+`data.eslot`; `moisturedelta`) PLUS a light **~0.5s poll** for states that fire NO event (container
+open/close, the integrated-backpack setting toggle, character badges). Two coordinate facts make
+this tractable: **(a)** these roots share the SAME `hudscale × proportional` chain as your widget's
+root, so a *fixed* offset / reserve gives **constant visual clearance at every resolution** — only
+the per-widget base scale differs (inventory bar `0.6` vs statusdisplays `1.4`; convert a distance
+by the constant ratio `0.6/1.4 ≈ 0.43`); **(b)** in these right-anchored roots **negative x = toward
+the right screen edge**, same sign convention as a leftward-growing column.
+
+## 12. Proportional HUD scale in layout math (resized-window collapse)
+
+Roots like `topleft_root` / `bottom_root` / `containerroot_side` are scaled by BOTH
+`SetScale(GetHUDScale())` AND `SCALEMODE_PROPORTIONAL` (+ `SetMaxPropUpscale(MAX_HUD_SCALE)`,
+`controls.lua`). The proportional factor ≈ `min(screenW/1280, screenH/720)` capped at
+`MAX_HUD_SCALE = 1.25` (RESOLUTION_X/Y = 1280/720, `constants.lua`). So a widget's PIXEL size =
+`local × widget_scale × hudscale × prop`. Column-wrap / keep-out math that converts screen height
+into widget-local units **must divide by `prop` too**:
+`usable = screenH / (hudscale × widget_scale × prop)`. Omitting `prop` makes the count wrong
+off the reference resolution: on a window smaller than 1280×720, `prop < 1` shrinks the real
+widgets but `usable` doesn't follow → **the column collapses to a single item with lots of empty
+space** (and over-counts above 1080p). Dividing `prop` out makes per-column count
+resolution-stable (and grow correctly above 1080p up to the 1.25 cap). Distinct from §8 (timing):
+even computed at the right time, the formula itself must include `prop`.
+
+## 13. Exact pixel size of an atlas element (it is NOT in the Lua scripts)
+
+Icon/element pixel dimensions live in the **texture atlas**, not the extracted scripts. When you
+need them (to centre an off-centre glyph, or size an icon to a ring):
+- The element's UV rect is in the atlas XML, e.g. `images/hud.xml`:
+  `<Element name="tab_arcane.tex" u1=.. u2=.. v1=.. v2=.. />`.
+- The atlas pixel size is in the matching `.tex` (KTEX): the first mipmap entry's width/height —
+  after the 8-byte `KTEX`+header, read `width,height` as little-endian `u16` at offset 8 / 10.
+- `element_px = (u2 − u1) × atlas_width`.
+- On a dedicated server these are zipped in `data/databundles/images.zip` (the bundle still
+  contains the atlas even when unpacked assets are stripped). Extract with Python `zipfile`.
+
+Worked example (this project): `tab_arcane.tex` UV Δ = 0.0620 on a 2048² atlas → **127×127 px
+native**. **CAVEAT:** a square UV element can still draw its visible glyph **off-centre inside its
+own bounds** — the atlas gives the element BOX, not the glyph's optical centre — so final centring
+still needs an in-game eyeball: **bracket** the offset (find the value that reads left and the one
+that reads right; the centre is between them).
