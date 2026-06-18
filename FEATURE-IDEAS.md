@@ -13,7 +13,7 @@
 - 標 ✅ 的是「已扣掉我們現有功能」後**真正算新的**;與既有重複的不列。
 
 ### ⚠️ 研究限制(誠實註記)
-做這份調查時,對外網路受限(醫院網路 FortiGuard 過濾 + Steam Workshop 頁面為 JS-heavy,WebFetch 抓不全)。因此**部分對比 mod 的功能描述是從 GitHub 原始碼 + 既有知識重建的,不是逐一驗證過的 live Workshop 頁面**。把本文件當「點子清單」看即可,真要做某項前,建議再去該 mod 的 Workshop / repo 確認它實際怎麼做。
+做這份調查時,對外網路受限(Steam Workshop 頁面為 JS-heavy,WebFetch 抓不全)。因此**部分對比 mod 的功能描述是從 GitHub 原始碼 + 既有知識重建的,不是逐一驗證過的 live Workshop 頁面**。把本文件當「點子清單」看即可,真要做某項前,建議再去該 mod 的 Workshop / repo 確認它實際怎麼做。
 
 ### 目標 mod 的結論
 使用者點名的 **Workshop `1233501056`「PartyHUD - Forked」就是 brianchenito 的 GitHub fork —— 也就是 PartyHud 2026 的直系祖先**。它有的(HP、max-penalty 弧、rate arrow、名字、死亡狀態、layout/position)我們**全都有了**,所以新點子全來自其他對比 mod。
