@@ -29,7 +29,7 @@ local M = {}
 -- Returns a fresh, empty store.  Multiple independent stores can coexist (no module-level
 -- mutable state is used).
 function M.new()
-    return { _data = {} }
+  return { _data = {} }
 end
 
 -- upsert(store, records, now)
@@ -38,16 +38,18 @@ end
 -- timestamp.  `records` may be nil or an empty table -- both are treated as no-ops.
 -- `now` must be a number (the caller's current clock value).
 function M.upsert(store, records, now)
-    if not records then return end
-    for _, rec in ipairs(records) do
-        -- Shallow-copy the record so the store owns its own data (caller may reuse theirs).
-        local entry = {}
-        for k, v in pairs(rec) do
-            entry[k] = v
-        end
-        entry._last_update = now
-        store._data[rec.userid] = entry
+  if not records then
+    return
+  end
+  for _, rec in ipairs(records) do
+    -- Shallow-copy the record so the store owns its own data (caller may reuse theirs).
+    local entry = {}
+    for k, v in pairs(rec) do
+      entry[k] = v
     end
+    entry._last_update = now
+    store._data[rec.userid] = entry
+  end
 end
 
 -- expire(store, now, ttl) -> removed_count
@@ -61,18 +63,18 @@ end
 --
 -- Returns the number of entries removed.
 function M.expire(store, now, ttl)
-    local removed = 0
-    local to_remove = {}
-    for userid, entry in pairs(store._data) do
-        if (now - entry._last_update) > ttl then
-            to_remove[#to_remove + 1] = userid
-        end
+  local removed = 0
+  local to_remove = {}
+  for userid, entry in pairs(store._data) do
+    if (now - entry._last_update) > ttl then
+      to_remove[#to_remove + 1] = userid
     end
-    for _, userid in ipairs(to_remove) do
-        store._data[userid] = nil
-        removed = removed + 1
-    end
-    return removed
+  end
+  for _, userid in ipairs(to_remove) do
+    store._data[userid] = nil
+    removed = removed + 1
+  end
+  return removed
 end
 
 -- active(store) -> array of records
@@ -81,26 +83,26 @@ end
 -- entry with the internal `_last_update` field stripped -- the renderer must not rely on or
 -- accidentally display it.
 function M.active(store)
-    -- Collect all userids first so we can sort them.
-    local userids = {}
-    for userid in pairs(store._data) do
-        userids[#userids + 1] = userid
-    end
-    table.sort(userids)
+  -- Collect all userids first so we can sort them.
+  local userids = {}
+  for userid in pairs(store._data) do
+    userids[#userids + 1] = userid
+  end
+  table.sort(userids)
 
-    local out = {}
-    for _, userid in ipairs(userids) do
-        local entry = store._data[userid]
-        local rec = {}
-        for k, v in pairs(entry) do
-            -- Strip the single internal bookkeeping field.
-            if k ~= "_last_update" then
-                rec[k] = v
-            end
-        end
-        out[#out + 1] = rec
+  local out = {}
+  for _, userid in ipairs(userids) do
+    local entry = store._data[userid]
+    local rec = {}
+    for k, v in pairs(entry) do
+      -- Strip the single internal bookkeeping field.
+      if k ~= "_last_update" then
+        rec[k] = v
+      end
     end
-    return out
+    out[#out + 1] = rec
+  end
+  return out
 end
 
 -- reconcile(store, live_userids) -> removed_count
@@ -114,35 +116,35 @@ end
 --
 -- Returns the number of entries removed.
 function M.reconcile(store, live_userids)
-    -- Normalise to a set (key -> true) for O(1) membership tests.
-    local live_set = {}
-    if live_userids then
-        for k, v in pairs(live_userids) do
-            if type(k) == "number" then
-                -- Array form: values are userids (must be strings; non-string values
-                -- are silently ignored to guard against accidental numeric arrays).
-                if type(v) == "string" then
-                    live_set[v] = true
-                end
-            else
-                -- Set form: keys are userids.
-                live_set[k] = true
-            end
+  -- Normalise to a set (key -> true) for O(1) membership tests.
+  local live_set = {}
+  if live_userids then
+    for k, v in pairs(live_userids) do
+      if type(k) == "number" then
+        -- Array form: values are userids (must be strings; non-string values
+        -- are silently ignored to guard against accidental numeric arrays).
+        if type(v) == "string" then
+          live_set[v] = true
         end
+      else
+        -- Set form: keys are userids.
+        live_set[k] = true
+      end
     end
+  end
 
-    local removed = 0
-    local to_remove = {}
-    for userid in pairs(store._data) do
-        if not live_set[userid] then
-            to_remove[#to_remove + 1] = userid
-        end
+  local removed = 0
+  local to_remove = {}
+  for userid in pairs(store._data) do
+    if not live_set[userid] then
+      to_remove[#to_remove + 1] = userid
     end
-    for _, userid in ipairs(to_remove) do
-        store._data[userid] = nil
-        removed = removed + 1
-    end
-    return removed
+  end
+  for _, userid in ipairs(to_remove) do
+    store._data[userid] = nil
+    removed = removed + 1
+  end
+  return removed
 end
 
 -- v2026.11 (extracted for test): merge this shard's own player records with the foreign (other-shard)
@@ -150,20 +152,20 @@ end
 -- shard-migration) appears once, as the local copy. Skips nil/"" userids in the local set and nil
 -- userids in the foreign set (matching the publish-time guards).
 function M.merge_local_foreign(local_records, foreign_records)
-    local merged, seen = {}, {}
-    for _, r in ipairs(local_records or {}) do
-        if r.userid ~= nil and r.userid ~= "" and not seen[r.userid] then
-            seen[r.userid] = true
-            merged[#merged + 1] = r
-        end
+  local merged, seen = {}, {}
+  for _, r in ipairs(local_records or {}) do
+    if r.userid ~= nil and r.userid ~= "" and not seen[r.userid] then
+      seen[r.userid] = true
+      merged[#merged + 1] = r
     end
-    for _, r in ipairs(foreign_records or {}) do
-        if r.userid ~= nil and not seen[r.userid] then
-            seen[r.userid] = true
-            merged[#merged + 1] = r
-        end
+  end
+  for _, r in ipairs(foreign_records or {}) do
+    if r.userid ~= nil and not seen[r.userid] then
+      seen[r.userid] = true
+      merged[#merged + 1] = r
     end
-    return merged
+  end
+  return merged
 end
 
 -- v2026.11 (extracted for test): this client's own shard id, read from ITS OWN record in the broadcast
@@ -171,20 +173,22 @@ end
 -- the origin number, or nil if my_userid is nil or no matching record with an origin is present yet.
 -- (TheShard:GetShardId() is unreliable on a pure client -- see the v2026.8/.9 notes -- so we derive it.)
 function M.my_shard_from_records(records, my_userid)
-    if my_userid == nil then return nil end
-    for _, r in ipairs(records or {}) do
-        if r.userid == my_userid and r.origin ~= nil then
-            return r.origin
-        end
-    end
+  if my_userid == nil then
     return nil
+  end
+  for _, r in ipairs(records or {}) do
+    if r.userid == my_userid and r.origin ~= nil then
+      return r.origin
+    end
+  end
+  return nil
 end
 
 -- v2026.11 (extracted for test): is a foreign record on the SAME shard as this client? True only when
 -- both the record's origin and my_shard are known and equal -> "far" (same-shard out-of-view);
 -- otherwise (nil origin from a v1 peer, or unknown my_shard) treat as cross-shard ("Caves"/"Surface").
 function M.is_same_shard(rec_origin, my_shard)
-    return (my_shard ~= nil and rec_origin ~= nil and rec_origin == my_shard)
+  return (my_shard ~= nil and rec_origin ~= nil and rec_origin == my_shard)
 end
 
 return M

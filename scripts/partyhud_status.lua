@@ -16,21 +16,21 @@ local M = {}
 -- (the game shows a rising arrow when asleep). Awake we clamp: no rising arrow at full sanity, no
 -- falling arrow at empty -- matching the vanilla badge.
 function M.sanity_ratescale(is_sleeping, sleep_rate, raw_rs, pct, RS)
-    if is_sleeping then
-        if pct < 1 then
-            return (sleep_rate > .2 and RS.INCREASE_HIGH)
-                or (sleep_rate > .1 and RS.INCREASE_MED)
-                or (sleep_rate > .01 and RS.INCREASE_LOW)
-                or RS.NEUTRAL
-        end
-        return RS.NEUTRAL
-    end
-    if raw_rs == RS.INCREASE_HIGH or raw_rs == RS.INCREASE_MED or raw_rs == RS.INCREASE_LOW then
-        return (pct < 1) and raw_rs or RS.NEUTRAL
-    elseif raw_rs == RS.DECREASE_HIGH or raw_rs == RS.DECREASE_MED or raw_rs == RS.DECREASE_LOW then
-        return (pct > 0) and raw_rs or RS.NEUTRAL
+  if is_sleeping then
+    if pct < 1 then
+      return (sleep_rate > 0.2 and RS.INCREASE_HIGH)
+        or (sleep_rate > 0.1 and RS.INCREASE_MED)
+        or (sleep_rate > 0.01 and RS.INCREASE_LOW)
+        or RS.NEUTRAL
     end
     return RS.NEUTRAL
+  end
+  if raw_rs == RS.INCREASE_HIGH or raw_rs == RS.INCREASE_MED or raw_rs == RS.INCREASE_LOW then
+    return (pct < 1) and raw_rs or RS.NEUTRAL
+  elseif raw_rs == RS.DECREASE_HIGH or raw_rs == RS.DECREASE_MED or raw_rs == RS.DECREASE_LOW then
+    return (pct > 0) and raw_rs or RS.NEUTRAL
+  end
+  return RS.NEUTRAL
 end
 
 return M
