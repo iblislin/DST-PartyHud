@@ -7,6 +7,10 @@ local Badge = require("widgets/badge")
 local Text = require("widgets/text")
 local Image = require("widgets/image")
 local UIAnim = require("widgets/uianim")
+-- v2026.11: pure badge colour / predicate math (frame_colour + is_low_hp + the colour constants),
+-- extracted so it can be busted-tested with zero engine deps. The widget reads its live state and
+-- delegates the arithmetic here, keeping ownership of the engine calls.
+local badgemath = require("partyhud_badge")
 
 -- canonical DST badge tints (from widgets/healthbadge.lua, hungerbadge.lua, sanitybadge.lua):
 -- health red, hunger gold, sanity ORANGE (the blue {191,232,240} is the lunacy variant, not normal sanity)
@@ -144,18 +148,17 @@ end)
 -- v2026.8: dim alpha applied to every visible badge element when the slot shows a FOREIGN
 -- (other-shard) player, so it reads as "muted / data is ~1s stale". RGB stays at each element's
 -- base tint -- only alpha drops -- so hue (red HP / gold hunger / orange sanity) is preserved.
-local FOREIGN_ALPHA = 0.45
-local FULL_ALPHA = 1
+-- FOREIGN_ALPHA / FULL_ALPHA now live in partyhud_badge (busted-tested); aliased here for SetForeign.
+local FOREIGN_ALPHA = badgemath.FOREIGN_ALPHA
+local FULL_ALPHA = badgemath.FULL_ALPHA
 
--- v2026.9 low-HP alert: a blinking red ring border (circleframe) when a teammate's HP drops
--- below a player-chosen threshold. Distinct from the thermal warning pulse (self.warning) so both
--- cues can show at once. LOW_HP_TINT is brighter than the HP fill {174,21,21}/255 so it pops
--- against the red ring underneath. NOTE: circleframe's animstate also carries the heart ICON glyph
+-- v2026.9 low-HP alert: a blinking red ring border (circleframe) when a teammate's HP drops below a
+-- player-chosen threshold. Distinct from the thermal warning pulse (self.warning) so both cues can
+-- show at once. LOW_HP_TINT is brighter than the HP fill {174,21,21}/255 so it pops against the red
+-- ring underneath. NOTE: circleframe's animstate also carries the heart ICON glyph
 -- (OverrideSymbol("icon",...) in Badge._ctor), so SetMultColour tints the heart red too during the
--- alarm phase -- intended (a red heart reads as a health alarm).
-local LOW_HP_TINT = { 1, 0.15, 0.15 }
-local LOW_HP_PULSE_SECS = 1.2 -- one full breathe cycle (rest -> alarm -> rest), seconds
-local LOW_HP_PULSE_W = (2 * math.pi) / LOW_HP_PULSE_SECS -- angular speed for the sine pulse
+-- alarm phase -- intended (a red heart reads as a health alarm). The low-HP constants + the breathe
+-- arithmetic now live in partyhud_badge.frame_colour (busted-tested).
 
 -- Apply a uniform alpha to a UIAnim's animstate while keeping its existing RGB. We re-assert the
 -- base RGB explicitly (mult-colour is absolute, not cumulative) so a restore can't leave a stale
@@ -218,7 +221,9 @@ function PartyBadge:SetPercent(cur, max, penaltypercent)
   -- v2026.9 low-HP alert: blink the border below the configured threshold (fraction of max HP).
   -- 0 threshold = disabled. Runs for BOTH the local and the foreign path (the foreign render also
   -- calls SetPercent with the relayed hp_cur/hp_max), so far/cross-shard badges blink for free.
-  self:_set_low_hp(self.low_hp_threshold > 0 and (cur / m) < self.low_hp_threshold)
+  -- The predicate is the pure badgemath.is_low_hp (cur/max already normalized above, but it re-applies
+  -- the same nil/<=0 coercion so it stays correct in isolation).
+  self:_set_low_hp(badgemath.is_low_hp(cur, max, self.low_hp_threshold))
 end
 
 -- v2026.6: hunger_cur/sanity_cur are absolute current values (the displayed number);
@@ -300,22 +305,9 @@ function PartyBadge:_apply_frame_colour()
   if self.circleframe == nil then
     return
   end
-  -- baseline border = white at the badge's current alpha (dimmed if this is a far teammate).
-  local base_a = self.foreign and FOREIGN_ALPHA or FULL_ALPHA
-  if self.low_hp then
-    -- smooth "breathe" between baseline and alarm-red: a sine on the OnUpdate-advanced phase
-    -- gives k in 0..1; Lerp (mathutil) each channel. Alpha rises toward 1 at the alarm peak so
-    -- the alert stays visible even on a dimmed far badge. Single writer -> coexists with the dim.
-    local k = 0.5 + 0.5 * math.sin(self._blink_t * LOW_HP_PULSE_W)
-    self.circleframe:GetAnimState():SetMultColour(
-      Lerp(1, LOW_HP_TINT[1], k),
-      Lerp(1, LOW_HP_TINT[2], k),
-      Lerp(1, LOW_HP_TINT[3], k),
-      Lerp(base_a, 1, k)
-    )
-  else
-    self.circleframe:GetAnimState():SetMultColour(1, 1, 1, base_a)
-  end
+  -- Delegate the breathe / dim-baseline arithmetic to the pure module (single writer -> the low-HP
+  -- blink and the foreign dim coexist without desyncing); apply the result via the same engine call.
+  self.circleframe:GetAnimState():SetMultColour(badgemath.frame_colour(self.low_hp, self.foreign, self._blink_t))
 end
 
 -- v2026.9: enter/leave the low-HP pulsing state. Idempotent. Uses the widget per-frame update loop
