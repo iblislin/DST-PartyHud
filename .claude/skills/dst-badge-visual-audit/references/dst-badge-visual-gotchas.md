@@ -213,6 +213,15 @@ teammate-badge column (file\:line in the current scripts):
   being non-nil (created per-character at HUD construct) or tags (`battlesinger`). NB the others
   (boat meter y-40; Wolfgang mightiness / Woby pet-hunger / wereness at +20) sit WITHIN the normal
   cluster height and do NOT push the bottom down — don't dodge them.
+  - **DISPLACEMENT → the overlap band can be WIDER than one column.** When two conditional widgets
+    want the same slot, vanilla shifts one to a *neighbouring column*: with rain **and** a Wendy/
+    Wigfrid badge, `statusdisplays` moves the moisture meter to `column2`/`column1`
+    (`statusdisplays.lua:413`), so the low band now spans **two** of your columns — the char badge
+    over col 0 **and** the displaced moisture meter over col 1. Dodging only col 0 leaves col 1's
+    first badge clipping the shifted meter. **Lesson: don't assume a conditional widget stays in
+    its lone home column — when several can co-occur, measure how many of YOUR columns the band
+    spans and dodge the full span** (we generalized a single `dodge` bool into a `dodge_cols` count
+    of 0/1/2 and laid the columns out individually).
 - **Side-container floating panel** — `controls.lua` `containerroot_side` (ANCHOR_RIGHT/MIDDLE,
   mid-right edge). An equipped body container shown when OPEN: backpack / krampus_sack / piggyback
   / icepack / spicepack / seedpouch / candybag — all `issidewidget=true` in `containers.lua`, all
