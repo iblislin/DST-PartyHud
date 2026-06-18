@@ -31,7 +31,7 @@ A modernized fork of [PartyHUD](https://github.com/brianchenito/PartyHud) by **b
 
 ### New in 2026.8 — cross-shard teammates + layout polish
 - **See teammates on the other shard** (Caves ↔ Surface) and same-shard teammates who are out of network range — players who previously had no badge at all. Their status is relayed over an always-networked broadcast and refreshed ~2×/second.
-- Far-away teammates render **dimmed with a "Caves" / "Surface" label** to signal the data is slightly delayed; a local teammate always wins, so nobody is drawn twice mid-migration.
+- Far-away teammates render **dimmed** to signal the data is slightly delayed, labelled by where they are: **"Caves" / "Surface"** for a teammate on the other shard, **"far"** for one on your own shard but out of network range. A local (in-view) teammate always wins, so nobody is drawn twice mid-migration.
 - **Fixed the column count on resized / small windows** — the vertical layout used to collapse every column to a single badge on a small window; it now accounts for the HUD's proportional scaling, so per-column count stays stable at any resolution.
 - **Per-column heights**: only the rightmost column reserves space for the game's Map (M) button; the other columns extend nearly to the screen bottom.
 - **Stays clear of the game's own UI**: the columns dodge the **rain (moisture) meter** and character status badges (**Wendy's Abigail**, **Wigfrid's inspiration**) when they appear below the status cluster — including the wider two-column case — and the dead-player **skull icon is now centred** on the badge.
@@ -101,12 +101,29 @@ to work on current Don't Starve Together builds.
 [*] More robust ghost / dead state and join / leave / cave-migration handling
 [/list]
 
+[b]New in 2026.8 — cross-shard teammates + layout polish[/b]
+[list]
+[*] See teammates on the OTHER shard (Caves <-> Surface) and same-shard teammates out of network
+    range — players who used to have no badge at all. Relayed over an always-networked broadcast,
+    refreshed about twice a second
+[*] Far-away teammates render dimmed and labelled: "Caves" / "Surface" for the other shard, "far"
+    for your own shard out of range. A local (in-view) teammate always wins, so nobody is drawn twice
+[*] Vertical layout column count is now stable on resized / small windows (accounts for HUD scaling)
+[*] Columns reserve Map-button space only on the rightmost column; the rest extend toward the bottom
+[*] Stays clear of the game's own UI — dodges the rain (moisture) meter and character status badges
+    (Wendy's Abigail, Wigfrid's inspiration); the dead-player skull icon is now centred
+[*] Backpack-aware: the HUD shifts left to clear an open side backpack, or reserves extra bottom space
+    with the Integrated Backpack option; reacts instantly to open/close, equip/unequip, and pack swap
+[/list]
+
 [b]Settings (each player picks their own)[/b]
 [list]
 [*] HUD Layout: Horizontal / Vertical
 [*] HUD Position: Minimap / Minimap XL / Standard
 [*] Show Your Own Badge: Show / Skip
 [*] Hunger/Sanity Sub-gauges: Show / Hide
+[*] Show Cross-Shard Teammates: Show / Hide (other-shard or out-of-view teammates; on by default)
+[*] HP Number: Always / On hover
 [/list]
 
 [b]Note[/b] — this is a server mod: install it on your dedicated server (or enable
@@ -155,12 +172,28 @@ Thanks for the original work!
 [*] 強化幽靈/死亡狀態,以及加入 / 離開 / 進洞穴遷移的處理
 [/list]
 
+[b]2026.8 新增 —— 跨 shard 隊友與排版優化[/b]
+[list]
+[*] 看得到另一個 shard(洞穴 <-> 地面)的隊友,以及同 shard 但超出網路範圍的隊友 —— 這些人以前
+    完全沒有徽章。狀態透過恆連線的廣播中繼,約每秒更新兩次
+[*] 遠方隊友以變暗呈現並標示位置:另一 shard 標「Caves」/「Surface」,同 shard 超出範圍標「far」。
+    視野內的本地隊友永遠優先,所以不會重複顯示
+[*] 垂直排列在縮放 / 小視窗下的欄數現在穩定(納入 HUD 比例縮放計算)
+[*] 只有最右欄保留地圖(M)按鈕空間,其餘欄位向下延伸
+[*] 避開遊戲原生 UI —— 閃開雨量(潮濕)計與角色狀態徽章(Wendy 的 Abigail、Wigfrid 的靈感);
+    死亡玩家的骷髏圖示現在置中
+[*] 背包感知:開啟側邊背包時整個 HUD 左移讓位,或在「整合式背包」選項下保留底部空間;
+    開關背包、裝備/卸下、甚至交換背包都會即時反應
+[/list]
+
 [b]設定(每位玩家各自選擇)[/b]
 [list]
 [*] HUD Layout(排列):Horizontal(水平)/ Vertical(垂直)
 [*] HUD Position(位置):Minimap / Minimap XL / Standard
 [*] Show Your Own Badge(顯示自己):Show / Skip
 [*] Hunger/Sanity Sub-gauges(飢餓/理智子環):Show / Hide
+[*] Show Cross-Shard Teammates(顯示跨 shard 隊友):Show / Hide(另一 shard 或超出視野的隊友;預設開啟)
+[*] HP Number(HP 數字):Always(總是)/ On hover(滑鼠移上)
 [/list]
 
 [b]注意[/b] —— 這是伺服器端 mod:安裝在你的專用伺服器(或開房時啟用),
