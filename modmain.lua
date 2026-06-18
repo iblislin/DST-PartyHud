@@ -73,7 +73,7 @@ local BACKPACK_SHIFT_X = 100 -- badge-local units to shift ALL columns LEFT when
                             -- and would cover our badges. Visually tuned.
 local BACKPACK_BOTTOM_EXTRA = 20 -- extra badge-local units added to the columns-2+ bottom reserve when an
                                  -- INTEGRATED backpack is equipped (the bottom inventory bar grows taller).
-local second_row_active = false -- client-local: is a LOW second-row badge (moisture/rain meter, Wendy's Abigail pet-health, or Wigfrid's inspiration) present in the top-right status cluster? When true, column 0's top is pushed down to dodge it.
+local second_row_cols = 0 -- client-local: how many of OUR leading columns the top-right status second-row band spans (0/1/2; see status_second_row). Those columns get their top pushed down to dodge the band (moisture meter / Abigail / inspiration).
 local last_bpmode = -1 -- client-local: last applied backpack UI mode (see backpack_layout_mode); a 0.5s poll re-lays-out on change (right-click open/close + the integrated-backpack setting toggle fire NO event).
 
 --imports partybadge
@@ -174,13 +174,20 @@ end
 -- pet-health badge, and Wigfrid's inspiration badge (game y -115 / -100 / -130). `sd` is the vanilla
 -- StatusDisplays widget (our postconstruct's self); pethealthbadge/inspirationbadge are non-nil only
 -- for those characters. Boat/mightiness/pet-hunger/wereness sit in the normal cluster height -> ignored.
+-- Returns how many of OUR columns the top-right status "second row" band spans: 0, 1, or 2.
+-- Each low-band badge (moisture meter when wet, Wendy's Abigail pet-health, Wigfrid's inspiration)
+-- counts as one. 1 => a single badge over col 0. 2 => the band is WIDE: a character badge DISPLACES
+-- the moisture meter onto a neighbouring column (game: statusdisplays moves the moisture meter to
+-- column2/column1 when pethealth/inspiration is present), so it covers col 0 AND col 1. The first
+-- N columns then get their top pushed down.
 local function status_second_row(sd)
-    if sd == nil then return false end
+    if sd == nil then return 0 end
+    local n = 0
     local p = sd.owner
-    if p ~= nil and p.GetMoisture ~= nil and (p:GetMoisture() or 0) > 0 then return true end
-    if sd.pethealthbadge ~= nil then return true end
-    if sd.inspirationbadge ~= nil then return true end
-    return false
+    if p ~= nil and p.GetMoisture ~= nil and (p:GetMoisture() or 0) > 0 then n = n + 1 end
+    if sd.pethealthbadge ~= nil then n = n + 1 end
+    if sd.inspirationbadge ~= nil then n = n + 1 end
+    return n > 2 and 2 or n
 end
 
 -- Position every badge. Vertical layout wraps into columns sized by the live screen height.
@@ -208,36 +215,31 @@ local function layout_badges(badgearray)
 	local bpmode = backpack_layout_mode()
 	if bpmode == 1 then vstartx = vstartx - BACKPACK_SHIFT_X end
 	-- v2026.8: each column's available height differs by its on-screen obstacles, so capacities are
-	-- computed PER COLUMN (they are no longer uniform):
-	--  * Column 0 (rightmost): the game's moisture (rain) meter sits right below the sanity badge --
-	--    exactly where col 0's top would be -- so push col 0's TOP down by MOISTURE_TOP_RESERVE while the
-	--    meter is showing; AND the Map(M) button sits at the bottom under this column, so col 0 keeps the
-	--    full VERT_BOTTOM_RESERVE keep-out. => shortest column.
-	--  * Columns 1+ (further LEFT): no moisture meter above and no Map button below them, so they start at
-	--    the normal top y AND extend nearly to the screen bottom (only the small VERT_BOTTOM_RESERVE_FREE
-	--    margin). => taller columns. This is why col 0 is intentionally shorter than the later columns.
-	-- Mode A shifted col 0 LEFT, off the moisture / pet-health / inspiration band too, so it no longer
-	-- needs the second-row top gap there -- align col 0's top with the other columns. Only apply the push
-	-- when NOT in Mode A.
-	local col0_y    = (second_row_active and bpmode ~= 1) and (vstarty - MOISTURE_TOP_RESERVE) or vstarty
-	-- columns 2+ free reserve: integrated backpack (Mode B) adds extra bottom keep-out for the taller bar.
+	-- computed PER COLUMN (no longer a uniform per_col):
+	--  * TOP: the top-right status "second row" (moisture meter / Abigail / inspiration) sits exactly
+	--    where the leading column(s)' top would be, so push the first `dodge_cols` columns' TOP down by
+	--    MOISTURE_TOP_RESERVE. `dodge_cols` is `second_row_cols` (0/1/2 -- it's 2 when rain + Abigail/
+	--    inspiration widens the band, displacing the moisture meter onto col 1). Mode A shifted ALL
+	--    columns LEFT off that whole cluster, so no top dodge there (0).
+	--  * BOTTOM: ONLY col 0 sits under the Map(M) button -> full VERT_BOTTOM_RESERVE (unless Mode A
+	--    shifted it off); later columns extend toward the screen bottom (`free`, +BACKPACK_BOTTOM_EXTRA
+	--    in Mode B's taller-bar case).
 	local free = VERT_BOTTOM_RESERVE_FREE + ((bpmode == 2) and BACKPACK_BOTTOM_EXTRA or 0)
-	-- col 0 reserve: in Mode A it's been shifted left OFF the Map(M) button, so it can extend down like the
-	-- others (use `free`); otherwise it still sits over the button, so keep the full Map keep-out.
-	local col0_reserve = (bpmode == 1) and free or VERT_BOTTOM_RESERVE
-	local col0_cap  = compute_percol(col0_y, col0_reserve)             -- top dodges moisture; bottom reserves Map(M) (or `free` in Mode A)
-	local other_cap = compute_percol(vstarty, free)                   -- full top, extends to screen bottom
-	for i = 1, #badgearray do
-		local col, row, ystart
-		if i <= col0_cap then
-			col, row, ystart = 0, i - 1, col0_y
-		else
-			local j = i - col0_cap - 1
-			col = 1 + math.floor(j / other_cap)
-			row = j % other_cap
-			ystart = vstarty
+	local dodge_cols = (bpmode == 1) and 0 or second_row_cols
+	-- Fill top-to-bottom, wrapping LEFTWARD (right-anchored list). compute_percol always returns >=1 so
+	-- col advances and i grows each pass; `col <= n` is a belt-and-suspenders bound on the loop.
+	local n = #badgearray
+	local i, col = 1, 0
+	while i <= n and col <= n do
+		local top    = (col < dodge_cols) and (vstarty - MOISTURE_TOP_RESERVE) or vstarty
+		local bottom = (col == 0 and bpmode ~= 1) and VERT_BOTTOM_RESERVE or free
+		local cap = compute_percol(top, bottom)
+		for row = 0, cap - 1 do
+			if i > n then break end
+			badgearray[i]:SetPosition(vstartx - VERT_COL_W*col, top + vgap*row, 0)
+			i = i + 1
 		end
-		badgearray[i]:SetPosition(vstartx - VERT_COL_W*col, ystart + vgap*row, 0)
+		col = col + 1
 	end
 end
 
@@ -258,11 +260,11 @@ local function onstatusdisplaysconstruct(self)
 	-- re-layout when the second-row presence actually toggles. Registered on self.inst with self.owner as
 	-- source so Widget:Kill tears it down with the HUD.
 	if self.inst ~= nil and self.owner ~= nil then
-		second_row_active = status_second_row(self)
+		second_row_cols = status_second_row(self)
 		local function refresh_second_row_layout()
 			local a = status_second_row(self)
-			if a ~= second_row_active then
-				second_row_active = a
+			if a ~= second_row_cols then
+				second_row_cols = a
 				layout_badges(self.badgearray)
 			end
 		end
@@ -291,9 +293,9 @@ local function onstatusdisplaysconstruct(self)
 		self.inst:DoPeriodicTask(0.5, function()
 			local m = backpack_layout_mode()
 			local s = status_second_row(self)
-			if m ~= last_bpmode or s ~= second_row_active then
+			if m ~= last_bpmode or s ~= second_row_cols then
 				last_bpmode = m
-				second_row_active = s
+				second_row_cols = s
 				layout_badges(self.badgearray)
 			end
 		end)
