@@ -63,6 +63,10 @@ local VERT_BOTTOM_RESERVE = 190 -- badge-local units kept clear at the bottom fo
                                 -- button. FIXED (not per-row): the compact gap is tighter, so a
                                 -- per-row reserve would pack an extra badge into the button. Larger
                                 -- = wraps a column one badge sooner.
+local VERT_BOTTOM_RESERVE_FREE = 40 -- bottom keep-out for columns 2+ (further LEFT than the rightmost
+                                    -- column): the game's Map(M) button only sits under the FIRST
+                                    -- column, so later columns have a clear bottom and extend nearly to
+                                    -- the screen edge (just this small margin). Smaller = reach further down.
 local MOISTURE_TOP_RESERVE = 85 -- badge-local units to push the FIRST column's top DOWN when the game's moisture (rain) meter is showing, so our column 0 doesn't cover it. Visually tuned.
 local moisture_active = false -- client-local: is the game's moisture (rain) meter currently popped up (owner moisture > 0)? When true, column 0 is pushed down to dodge it.
 
@@ -96,7 +100,7 @@ end
 -- itself under topleft_root (scaled by TheFrontEnd:GetHUDScale()), so the visible height
 -- in badge-local units = screenheight / (hudscale * 1.4). Detect it so small screens /
 -- large HUD-size settings wrap to a second column instead of overflowing off-screen.
-local function compute_percol(vy)
+local function compute_percol(vy, bottom_reserve)
 	local scrnh
 	if GLOBAL.TheSim ~= nil and GLOBAL.TheSim.GetScreenSize ~= nil then
 		local _, h = GLOBAL.TheSim:GetScreenSize()
@@ -119,7 +123,7 @@ local function compute_percol(vy)
 	-- reserve a FIXED keep-out zone at the bottom for the game's map (M) button. It must be a
 	-- fixed absolute distance, NOT the row pitch: the compact (sub-gauges off) gap is tighter, so
 	-- a per-row reserve packs an extra badge into the button. Fixed keeps equal clearance in both modes.
-	local bottom_reserve = VERT_BOTTOM_RESERVE
+	bottom_reserve = bottom_reserve or VERT_BOTTOM_RESERVE -- default = full Map(M)-button keep-out (col 0); later columns pass a smaller value
 	-- last visible row: badge origin minus ~60 (its sub-ring bottom) must stay above the
 	-- reserved bottom zone.
 	local n = math.floor((vy - 60 + usable - bottom_reserve) / rowpitch) + 1
@@ -147,22 +151,26 @@ local function layout_badges(badgearray)
 	local vstartx, vstarty = VERT_X, VERT_Y
 	if positional==0 or positional==1 then vstartx, vstarty = phud_xpos, phud_ypos end
 	local vgap = show_substatus and VERT_GAP or VERT_GAP_COMPACT -- effective gap (tighter when sub-rings hidden)
-	local per_col = compute_percol(vstarty)
-	-- v2026.8: when the game's moisture (rain) meter is showing it sits right below the sanity badge,
-	-- exactly where our first column's top would be. Push ONLY column 0 down by MOISTURE_TOP_RESERVE so
-	-- it clears the meter; columns 2+ keep the normal top y. Column 0's reduced height is folded into the
-	-- wrap (compute_percol of the lower start = col 0's smaller capacity), so the overall column folding
-	-- recalculates for the changed available height.
-	local col0_y   = moisture_active and (vstarty - MOISTURE_TOP_RESERVE) or vstarty
-	local col0_cap = moisture_active and compute_percol(col0_y) or per_col
+	-- v2026.8: each column's available height differs by its on-screen obstacles, so capacities are
+	-- computed PER COLUMN (they are no longer uniform):
+	--  * Column 0 (rightmost): the game's moisture (rain) meter sits right below the sanity badge --
+	--    exactly where col 0's top would be -- so push col 0's TOP down by MOISTURE_TOP_RESERVE while the
+	--    meter is showing; AND the Map(M) button sits at the bottom under this column, so col 0 keeps the
+	--    full VERT_BOTTOM_RESERVE keep-out. => shortest column.
+	--  * Columns 1+ (further LEFT): no moisture meter above and no Map button below them, so they start at
+	--    the normal top y AND extend nearly to the screen bottom (only the small VERT_BOTTOM_RESERVE_FREE
+	--    margin). => taller columns. This is why col 0 is intentionally shorter than the later columns.
+	local col0_y    = moisture_active and (vstarty - MOISTURE_TOP_RESERVE) or vstarty
+	local col0_cap  = compute_percol(col0_y, VERT_BOTTOM_RESERVE)       -- top dodges moisture; bottom reserves Map(M)
+	local other_cap = compute_percol(vstarty, VERT_BOTTOM_RESERVE_FREE) -- full top, extends to screen bottom
 	for i = 1, #badgearray do
 		local col, row, ystart
 		if i <= col0_cap then
 			col, row, ystart = 0, i - 1, col0_y
 		else
 			local j = i - col0_cap - 1
-			col = 1 + math.floor(j / per_col)
-			row = j % per_col
+			col = 1 + math.floor(j / other_cap)
+			row = j % other_cap
 			ystart = vstarty
 		end
 		badgearray[i]:SetPosition(vstartx - VERT_COL_W*col, ystart + vgap*row, 0)
