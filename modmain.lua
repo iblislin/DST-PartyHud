@@ -53,6 +53,10 @@ local hp_number_always = (GetModConfigData("hp_number", true) == 1) -- false = H
 local show_crossshard = (GetModConfigData("show_crossshard", true) ~= 0)
 local DEBUG_SHOWALL = (GetModConfigData("debug_showall", true) == 1) -- [TEST] client option: mock-fill empty slots to preview layout (only this client sees it)
 local low_hp_threshold = (GetModConfigData("low_hp_alert", true) or 0) / 100 -- v2026.9: 0 = disabled; fraction of max HP
+-- v2026.11 avatar + name colour (both client-render-only). avatar_style: 0=Off/1=Corner/2=Centred head
+-- (resolved to "off"/"corner"/"centre" by avatarmath). name_colour: ~=0 = On (default On).
+local avatar_style_cfg = GetModConfigData("avatar_style", true)
+local name_colour_on = (GetModConfigData("name_colour", true) ~= 0)
 -- [vertical layout tunables] edit these then restart client; only used when layout=Vertical
 local VERT_X = 0 -- horizontal pos (more negative = further left)
 local VERT_Y = -130 -- y of the FIRST (top) badge; lower number = lower on screen
@@ -78,6 +82,10 @@ local BACKPACK_BOTTOM_EXTRA = 20 -- extra badge-local units added to the columns
 local second_row_cols = 0 -- client-local: how many of OUR leading columns the top-right status second-row band spans (0/1/2; see status_second_row). Those columns get their top pushed down to dodge the band (moisture meter / Abigail / inspiration).
 local second_row_reserve = 0 -- client-local: how far down to push those columns (= the DEEPEST active second-row badge's need; MOISTURE_TOP_RESERVE, or INSPIRATION_TOP_RESERVE when Wigfrid's deeper inspiration badge is present).
 local last_bpmode = -1 -- client-local: last applied backpack UI mode (see backpack_layout_mode); a 0.5s poll re-lays-out on change (right-click open/close + the integrated-backpack setting toggle fire NO event).
+-- v2026.11: runtime avatar style int, seeded from config (avatar_style_cfg above). The
+-- PartyHud_AvatarStyle console fn overrides it at runtime (modtest compare). resolve_avatar_style maps
+-- nil/this int -> "off"/"corner"/"centre".
+local current_avatar_style = avatar_style_cfg
 
 --imports partybadge
 local phud_custombadge = _G.require("widgets/partybadge")
@@ -109,6 +117,11 @@ local statuslogic = _G.require("partyhud_status")
 -- a local declared later in the chunk is NOT an upvalue of that earlier closure (would resolve to a
 -- nil global and crash the render path). Same forward-require discipline as layoutmath/crossshard/statuslogic.
 local record = _G.require("partyhud_record")
+-- pure avatar / name-colour decision logic (classify + atlas/tex + idflags + name_colour) -- forward
+-- required since UpdateBadges (defined inside onstatusdisplaysconstruct, above the later require blocks)
+-- uses it; a local declared later in the chunk is NOT an upvalue of that earlier closure (would resolve
+-- to a nil global and crash the render path). Same forward-require discipline as layoutmath/record/etc.
+local avatarmath = _G.require("partyhud_avatar")
 local get_client_foreign_records -- forward decl; assigned where the client store lives (see below)
 
 -- v2026.11 Q5 FOREIGN-DATA STALENESS HEARTBEAT (client-only; cannot crash the shard).
@@ -396,6 +409,31 @@ GLOBAL.PartyHud_Layout = function(n)
 end
 -- luacheck: pop
 
+-- [DEBUG/util] runtime avatar-style switch from the client console, no reconnect needed:
+--   PartyHud_AvatarStyle("off"|"corner"|"centre")  -> set the style and relayout the live badges
+-- Sets the module-level current_avatar_style (UpdateBadges + SetAvatarStyle read it) and re-applies to
+-- every live badge, then forces a refresh so the avatars rebuild. Client-only (ThePlayer/HUD nil on a
+-- dedicated server -> no-op). Returns the style string applied.
+-- luacheck: push ignore 122
+GLOBAL.PartyHud_AvatarStyle = function(style)
+  local map = { off = 0, corner = 1, centre = 2 }
+  current_avatar_style = map[style] or 0
+  local resolved = avatarmath.resolve_avatar_style(current_avatar_style)
+  local p = _G.ThePlayer
+  local sd = p ~= nil and p.HUD ~= nil and p.HUD.controls ~= nil and p.HUD.controls.status or nil
+  if sd ~= nil and sd.badgearray ~= nil then
+    for _, b in ipairs(sd.badgearray) do
+      b:SetAvatarStyle(resolved)
+    end
+    if p.UpdateBadges ~= nil then
+      p.UpdateBadges()
+    end
+  end
+  print("[PartyHud] avatar style = " .. resolved)
+  return resolved
+end
+-- luacheck: pop
+
 --constructor for badge array
 local function onstatusdisplaysconstruct(self)
   self.badgearray = {}
@@ -405,6 +443,8 @@ local function onstatusdisplaysconstruct(self)
     self.badgearray[i]:SetSubGauges(show_substatus) -- apply the sub-gauge config at construct time
     self.badgearray[i]:SetHPNumberAlways(hp_number_always)
     self.badgearray[i].low_hp_threshold = low_hp_threshold -- v2026.9 low-HP alert threshold
+    self.badgearray[i]:SetAvatarStyle(avatarmath.resolve_avatar_style(current_avatar_style)) -- v2026.11
+    self.badgearray[i]:SetPlayerColour(nil, name_colour_on) -- v2026.11: enable name colouring per config (colour pushed per refresh)
   end
 
   -- v2026.8: re-layout on the dynamic state that changes the backpack mode / second-row dodge.
@@ -529,6 +569,24 @@ local function onstatusdisplaysconstruct(self)
     local local_userids = {}
     -- next_slot is the first badge index NOT consumed by a local player; the foreign loop starts here.
     local next_slot = maxbadges + 1
+    -- v2026.11: cluster-wide identity from GetClientTable(), keyed by userid. Built ONCE per refresh and
+    -- read by BOTH the local block (authoritative were/stage userflags) and the foreign block (which has
+    -- no local entity at all). ZERO wire change -- the table is already maintained cluster-wide. Names
+    -- live here too (was a separate inner build); the foreign block reads namebyuserid from here.
+    local namebyuserid, prefabbyuserid, colourbyuserid, userflagsbyuserid = {}, {}, {}, {}
+    do
+      local ct = _G.TheNet ~= nil and _G.TheNet:GetClientTable() or nil
+      if ct ~= nil then
+        for _, c in ipairs(ct) do
+          if c.userid ~= nil and c.userid ~= "" then
+            namebyuserid[c.userid] = c.name
+            prefabbyuserid[c.userid] = c.prefab
+            colourbyuserid[c.userid] = c.colour
+            userflagsbyuserid[c.userid] = c.userflags or 0
+          end
+        end
+      end
+    end
     for i = 1, maxbadges do
       local b = self.badgearray[i]
       if b == nil then
@@ -560,6 +618,11 @@ local function onstatusdisplaysconstruct(self)
         end
         b:SetForeign(false) -- this slot is a LOCAL player: reset any "elsewhere" treatment
         b:SetName(v:GetDisplayName())
+        -- v2026.11 identity (local): prefab + colour off the entity; ghost/were/stage from the
+        -- cluster userflags (authoritative; the entity tags vary by character). Table fallback covers
+        -- the brief window before the entity's playercolour/prefab are populated.
+        b:SetPlayerColour(v.playercolour or colourbyuserid[v.userid], name_colour_on)
+        b:SetAvatar(v.prefab or prefabbyuserid[v.userid], userflagsbyuserid[v.userid] or 0, false)
         b:SetPercent(n.hpcur, n.maxhp, n.hppenalty)
         b:SetStatus(n.hunger, n.hungermax, n.sanity, n.sanitymax, n.onfire, n.overheating, n.freezing, n.sanitypenalty)
         b:SetSanityRate(n.sanityrate)
@@ -610,17 +673,8 @@ local function onstatusdisplaysconstruct(self)
       GLOBAL.print("[PartyHud] foreign data stale, hiding cross-shard badges (further repeats suppressed)")
     end
     if show_crossshard and not DEBUG_SHOWALL and foreign_fresh and next_slot <= maxbadges then
-      -- userid -> display name, built once per refresh from the cluster roster.
-      local namebyuserid = {}
-      local clienttable = _G.TheNet ~= nil and _G.TheNet:GetClientTable() or nil
-      if clienttable ~= nil then
-        for _, c in ipairs(clienttable) do
-          if c.userid ~= nil and c.userid ~= "" then
-            namebyuserid[c.userid] = c.name
-          end
-        end
-      end
-
+      -- namebyuserid (+ prefab/colour/userflags byuserid) is hoisted to the top of UpdateBadges
+      -- (built once per refresh from the cluster roster); the foreign block reads it directly here.
       -- This client's shard determines the label for the foreign one (2-shard cluster): if we
       -- are in the Caves the others are on the Surface, and vice versa. The pure ternary lives in
       -- crossshard.foreign_label; modmain keeps the TheWorld tag read.
@@ -666,6 +720,9 @@ local function onstatusdisplaysconstruct(self)
             b:SetForeign(true, label) -- cross-shard -> "Caves"/"Surface"
           end
           b:SetName(namebyuserid[rec.userid] or "?")
+          -- v2026.11 identity (foreign): all from the cluster roster (no local entity exists).
+          b:SetPlayerColour(colourbyuserid[rec.userid], name_colour_on)
+          b:SetAvatar(prefabbyuserid[rec.userid], userflagsbyuserid[rec.userid] or 0, true)
           b:SetPercent(n.hpcur, n.maxhp, n.hppenalty)
           -- SIMPLIFIED status: hunger/sanity + penalty shown, but NO live thermal pulse for far
           -- players (fire/overheat/freeze forced false -- misleading at ~1s lag).
