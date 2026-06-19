@@ -1,143 +1,152 @@
 # PartyHud 2026 v2026.11 — Character Avatars + Name Colouring — Design
 
-**Status:** approved (brainstorm 2026-06-19), pending spec review → implementation plan.
+**Status:** approved (brainstorm + research workflow `w7w2yuxlh`, 2026-06-19), pending spec review →
+implementation plan.
 
 **Goal:** Give each teammate badge per-player identity — the character's avatar in the badge, and the
-teammate's name rendered in their own player colour — so PartyHud stops looking identical to every
-other PartyHUD mod. Client-side render feature; cross-shard avatar support needs one wire-protocol bump.
+teammate's name in their own player colour — so PartyHud stops looking identical to every other
+PartyHUD mod. **Almost entirely client-side render**: cross-shard identity rides an existing
+cluster-wide channel (`GetClientTable`), so there is **no wire-protocol change**.
 
 **Why:** FEATURE-IDEAS Top-5 #3. The badge centre today is generic (HP number + a faint heart glyph).
-Avatars + name colour are the single highest-value visual differentiator and a common community ask.
+Avatars + name colour are the highest-value visual differentiator and a common community ask.
 
 ---
 
-## Locked decisions (from the brainstorm)
+## Locked decisions
 
-1. **Two avatar render styles, both shipped, user-selectable:**
-   - `corner` — a small flat avatar image inset in a badge corner; the HP fill ring + number stay
-     exactly as today.
-   - `centre` — an animated character head in the ring centre (Klei scoreboard style, skin/ghost
-     aware); the HP number becomes hover-only so the face is visible.
-   - A **debug console function** switches them instantly in modtest; the shipped control is a config
-     dropdown (below). The user compares both in-game and picks the default to ship.
-2. **Cross-shard avatars: extend the wire codec to protocol v3** with a per-record `prefab` string, so
-   far/other-shard teammates also show their real avatar (not a generic head).
-3. **Name colour** applies to local AND cross-shard teammates (colour is already client-readable
-   cluster-wide); reconciled with the foreign-dim via a single-writer helper.
-4. **Config:** one dropdown `Teammate avatar: Off / Corner / Centred head` + one toggle
-   `Name colour: On / Off` (default On). Both client options.
+1. **Avatar render styles, user-selectable via one curated dropdown:** `Off / Corner / Centred head`.
+   - `Corner` — a small flat avatar `Image` inset in a badge corner; HP fill ring + number unchanged.
+   - `Centred head` — an animated character head (Klei scoreboard style) in the ring centre; the HP
+     number becomes hover-only so the face shows.
+   - Optional 4th entry `Centred (flat)` (flat image in the centre, no animation) — deferred
+     nice-to-have, ship only if wanted. **`head+corner` is dropped** (illegible at inset size + pays
+     per-frame anim cost a tiny corner can't justify). SOURCE×POSITION are technically independent
+     (all 4 combos render), but only 3 are useful.
+   - A **debug console fn** switches styles instantly in modtest; the user picks the ship default after
+     an in-game compare.
+2. **Cross-shard identity comes from `TheNet:GetClientTable()` client-side — ZERO new wire data.** The
+   table is cluster-wide and already carries `{prefab, colour, base_skin, userflags, name, userid}` for
+   every player on both shards; the mod already reads it (`modmain.lua:540-545`) to build
+   `namebyuserid`. Build `prefabbyuserid` / `colourbyuserid` / `userflagsbyuserid` the same way and join
+   by `userid` in `UpdateBadges`. **No codec bump, no new netvar/RPC/store.** (Codec v3 with a per-record
+   `prefab` is demoted to a documented contingency — see Out of scope.)
+3. **Name colour** applies to local AND cross-shard teammates, reconciled with foreign-dim via a
+   single-writer helper. Default On (config toggle).
+4. **Config:** dropdown `Teammate avatar: Off / Corner / Centred head` + toggle `Name colour: On/Off`
+   (default On). Both client options.
 
 ---
 
-## Data sources
+## Data sources (all client-side reads — no server hook, no netvar)
 
 | What | Local teammate (`AllPlayers` entity `v`) | Cross-shard / foreign teammate |
 |---|---|---|
-| Character prefab | `v.prefab` (public client field) | **NEW:** carried in the codec v3 `prefab` field |
-| Avatar texture | `GetCharacterAvatarTextureLocation(prefab)` → `(atlas, tex)` | same fn, on the received prefab |
-| Player colour | `v.playercolour` (`{r,g,b,a}` 0-1) | `TheNet:GetClientTable()[i].colour` (cluster-wide) |
+| Character prefab | `v.prefab` | `GetClientTable()[i].prefab` (cluster-wide) |
+| Avatar texture | `GetCharacterAvatarTextureLocation(prefab)` → `(atlas, tex)` | same fn on the table prefab |
+| Player colour | `v.playercolour` | `GetClientTable()[i].colour` |
+| ghost / were / stage (animated head) | entity tags / `GetPlayerBadgeData` | `GetClientTable()[i].userflags` bits |
 
-- `GetCharacterAvatarTextureLocation` (game `characterutil.lua`) resolves base chars, registered mod
-  chars, and falls back to `avatar_mod.tex` / `avatar_unknown.tex` (in the base `images/avatars.xml`)
-  for unknown/unregistered — so a modded far teammate whose mod the receiver lacks shows a generic mod
-  head, never a crash / missing texture.
-- `images/avatars.xml` is a base-game atlas — **no mod `Asset` declaration needed**, and `SetTexture`
-  against an already-loaded base atlas is synchronous.
-- Name colour is **not** owner-only classified data (unlike HP/hunger/sanity) — it is public client
-  data, so name colour needs **no new server hook / netvar**. Only the cross-shard *avatar* needs new
-  wire data.
+- Player colour is **server-assigned in join order** from a fixed 24-colour warm palette
+  (`GetAvailablePlayerColours`, `networking.lua:671-714`) — not user-chosen, not name-hashed; stable
+  within a session. Both reads are `{r,g,b,a}` 0-1 tables, directly usable in `SetColour`.
+- `GetCharacterAvatarTextureLocation` (`characterutil.lua:72-90`) resolves base/registered-mod/random
+  chars and falls back to `avatar_mod.tex` (named-but-unregistered) / `avatar_unknown.tex` (empty/nil) —
+  in the base `images/avatars.xml` atlas (already loaded; `SetTexture` is synchronous, no mod `Asset`).
+  So even a far modded teammate whose mod the receiver lacks shows a generic mod head, never a crash.
 
 ---
 
 ## Components / files
 
 ### New pure module `scripts/partyhud_avatar.lua` (busted-tested)
-Pure prefab→avatar decision logic, no engine deps (same pattern as `partyhud_layout`/`_record`/etc.).
-The widget/modmain read engine values and delegate. Functions:
-- `M.classify(prefab, dst_charlist, mod_charlist)` → `"base" | "mod" | "random" | "unknown"` — mirrors
-  the game's `playerbadge.lua` classification (which list the prefab belongs to). The caller passes the
-  game's `DST_CHARACTERLIST` / `MODCHARACTERLIST` so the module stays engine-free and testable.
-- `M.atlas_and_tex(prefab, classify_result, mod_avatar_locations)` → `(atlas, tex)` — the same mapping
-  `GetCharacterAvatarTextureLocation` does, but as a pure function we can unit-test the fallback table
-  (unknown→`avatar_unknown.tex`, unregistered-mod→`avatar_mod.tex`, base→`images/avatars.xml`).
-  (Implementation note: the widget MAY call the game `GetCharacterAvatarTextureLocation` directly and
-  this module exists to pin the fallback decisions in tests; final split decided in the plan, but the
-  fallback rules MUST be busted-covered.)
-
-### `scripts/partyhud_statuscodec.lua` — protocol v3
-- `PROTOCOL_VERSION` → `3`. Encoder appends a `prefab` string field after `origin`.
-- Decoder handles **v1 / v2 / v3**: v3 record = v2 fields + `prefab`; v1/v2 records decode with
-  `prefab = nil` (→ receiver falls back to unknown avatar). Unknown/unsupported version → ignored
-  (existing behaviour, unchanged).
-- Field-count guard updated per version (`NUM_FIELDS` math already version-branched for v2; add the v3
-  branch). Prefab is a lowercase identifier — safe inside the `:`-delimited record (no separator clash).
+Pure, engine-free decision logic (same pattern as `partyhud_layout`/`_record`/etc.):
+- `M.classify(prefab, dst_charlist, mod_charlist)` → `"base"|"mod"|"random"|"unknown"` — mirrors
+  `characterutil.lua:82-87` (non-empty unknown name → the `mod` fallback bucket; nil/`""` → `unknown`).
+- `M.atlas_and_tex(prefab, classify_result, mod_avatar_locations)` → `(atlas, tex)` — the fallback
+  table (base/random→`images/avatars.xml`+`avatar_<p>.tex`; registered-mod→`mod_loc`+`avatar_<p>.tex`;
+  unregistered→`avatar_mod.tex`; unknown→`avatar_unknown.tex`).
+- `M.packidflags{ghost,were1,were2,stage3}` / `M.unpackidflags(n)` — bit round-trip for the animated
+  head state, sourced from `GetClientTable().userflags` (USERFLAGS `IS_GHOST=1`/`CHARACTER_STATE_1=4`/
+  `_2=8`/`_3=32`, `constants.lua:2383-2388`). Mirrors the existing `packflags`/`unpackflags`.
+- `M.identity_changed(prev, new)` → bool — prev-vs-new identity (prefab + idflags + optional base_skin)
+  → whether the badge avatar needs a refresh (the cheap change-gate for the per-refresh join).
+- `M.resolve_avatar_style(config_value)` → `"off"|"corner"|"centre"` — config→style; unknown/nil → `off`;
+  never yields the dropped `head-corner`.
+- `M.name_colour(playercolour, is_foreign, foreign_dim)` → `{r,g,b,a}` — the `_apply_name_colour`
+  reconciliation as a pure fn: local → `{r,g,b,1}`; foreign → `{r,g,b, a*foreign_dim}`; **nil or a
+  not-ready `{1,1,1,1}` → GREY `{0.6,0.6,0.6,a}`** (= `DEFAULT_PLAYER_COLOUR`, NOT white).
+- `M.is_low_contrast(playercolour)` → bool (OPTIONAL) — true only for BROWN/VIOLETRED/DARKPLUM
+  (the 3 low-luminance palette colours); ship only if a contrast decision actually lands in code.
 
 ### `scripts/widgets/partybadge.lua`
-- `PartyBadge:SetAvatar(prefab, is_foreign)` — called per-refresh; sets/clears the avatar for the
-  current style. `prefab == nil` (a v1/v2 foreign peer) → unknown avatar.
-- **Style `corner`:** a flat `Image` child (lazily created) positioned in a corner; `SetTexture`
-  from the resolved atlas/tex. HP ring + number untouched.
-- **Style `centre`:** an animated head `UIAnim` child in the ring centre — port the
-  `playerbadge.lua` pattern (`GetPlayerBadgeData(character, ghost, …)` + `SetSkinsOnAnim`); HP number
-  forced hover-only while this style is active.
+- `PartyBadge:SetAvatar(prefab, idflags, is_foreign)` — per-refresh; sets/clears the avatar for the
+  current style. `prefab == nil` → unknown avatar.
+  - `corner`: a flat `Image` child, `SetTexture` from the resolved atlas/tex; HP ring + number untouched.
+  - `centre`: an animated head `UIAnim` child — port `playerbadge.lua`: `GetPlayerBadgeData(character,
+    ghost, state_1, state_2, state_3)` (`skinsutils.lua:1903-1947`) → bank/anim/skin_mode/scale/y_offset,
+    then `SetSkinsOnAnim(animstate, prefab, base_build, {}, nil, skin_mode)` (**`components/skinner.lua:11`**
+    — NOT skinsutils). HP number forced hover-only while this style is active. Consider honouring
+    `Profile:GetAnimatedHeadsEnabled()` for per-badge perf parity across N badges.
 - `_apply_name_colour()` — **single-writer** for `self.name`'s colour, reconciling {player colour,
-  foreign-dim alpha}. `SetForeign` and `SetName` route through it (today `SetForeign` hard-sets the
-  name to `{1,1,1,a}`; it must instead re-assert `{r,g,b,a*dim}`). Mirrors the existing
-  `_apply_frame_colour` discipline exactly. Keep the font's existing drop shadow for dark-colour
-  legibility.
-- Foreign-dim, low-HP red-heart breathe (on `circleframe`), HP fill arc (on `self.anim`), skull/dead,
-  and the sub-rings all coexist: the avatar occupies the centre hole (centre style) or a corner
-  (corner style) and does not overlap the HP arc or the ring-border breathe.
+  foreign-dim}. `SetForeign`/`SetName` route through it; it REPLACES the current hard
+  `self.name:SetColour(1,1,1,a)` at `partybadge.lua:376`. Keep the font drop shadow (the badge name uses
+  the non-outline `BODYTEXTFONT`, so the shadow carries the 3 low-contrast colours — vanilla-consistent).
+- Coexistence: a centre avatar collides ONLY with the optional HP number (→ hover-only) and the dead
+  skull (mutually exclusive, shown via `ShowDead`). Sub-rings (`SUB_Y=-42`), name (+40), foreign label
+  (+50), low-HP ring-border breathe (on `circleframe`), HP fill arc (on `self.anim`) all coexist.
 
-### `modmain.lua`
-- **Refresh loop (`UpdateBadges`):** local path passes `v.prefab` + `v.playercolour`; foreign path
-  passes the record's `prefab` (codec v3) + a new `colourbyuserid[userid]` built from
-  `GetClientTable()` alongside the existing `namebyuserid`. Calls `b:SetAvatar(...)` and the
-  name-colour set. (The prefab/colour read stays in modmain; the badge delegates the rendering.)
-- **`build_local_records`:** add `prefab` to each record (server-side, from the player entity's
-  `prefab`). This is the only server-touching change; it feeds the codec v3 encoder.
-- **Debug console fn** `PartyHud_AvatarStyle("corner"|"centre"|"off")` — sets a module-level current
-  style + relayouts, for instant modtest comparison (no resubscribe). Sandbox rule: any non-whitelisted
-  global it uses must be `GLOBAL.*`.
-- Config read for the new options (the dropdown + the name-colour toggle), per-badge applied like the
-  existing `low_hp_threshold`.
+### `modmain.lua` (client-side only)
+- In the refresh path, build `prefabbyuserid` / `colourbyuserid` / `userflagsbyuserid` from
+  `GetClientTable()` alongside the existing `namebyuserid` (~`modmain.lua:540-545`). In `UpdateBadges`,
+  for each badge join the per-tick **status** (HP/hunger/sanity, unchanged) to **identity** by `userid`
+  (local: read the entity; foreign: read these tables) and call `b:SetAvatar(...)` + the name-colour set.
+- **Debug console fn** `PartyHud_AvatarStyle("off"|"corner"|"centre")` — module-level current style +
+  relayout, for instant modtest comparison. Any non-whitelisted global it uses must be `GLOBAL.*`.
+- Config read for `avatar_style` + `name_colour`, applied per-badge like the existing `low_hp_threshold`.
+- **No change to `build_local_records` / the codec / the broadcast task** — identity does not ride the
+  wire. (This is why the feature does not touch the cross-shard crash path.)
+
+### Event-driven identity (why GetClientTable is the right source)
+Identity is static for a session, changing only on discrete events: join/character-select, `ms_becameghost`/
+`ms_respawnedfromghost`, woodie weremode / wormwood stage, skin change, migration, and the rare prefab
+swap (wonkey/monkey-curse). The engine already maintains `GetClientTable()` on-change cluster-wide — so
+reading it per-refresh (cheap; or gated by `identity_changed`) IS the event-driven design, with no mod
+machinery. Decision ladder: (1) **GetClientTable client-side join** [chosen]; (2) a separate on-change
+identity channel (a 2nd `net_string` carrier + identity shard-RPC mirroring the status topology) ONLY if
+a real gap appears; (3) folding identity into the per-tick codec — **avoid** (pays per-tick cost + can't
+carry ghost/were without more bytes).
 
 ### `modinfo.lua`
 - `version` → `2026.11`.
-- New client options: `avatar_style` (dropdown: Off / Corner / Centred head; default = the chosen
-  ship style) and `name_colour` (On/Off, default On). Both `client = true`.
+- `avatar_style` dropdown (Off / Corner / Centred head; optionally + Centred (flat)); default = the
+  chosen ship style. `name_colour` toggle (On/Off, default On). Both `client = true`.
 
 ---
 
-## Testing & safety (the gate sequence)
-
-1. **busted** (pure modules — the regression net for the fiddly bits):
-   - `partyhud_avatar`: classify + atlas/tex fallback table (base / mod / unregistered-mod→`avatar_mod`
-     / unknown→`avatar_unknown` / random).
-   - `partyhud_statuscodec` v3: round-trip a record WITH `prefab`; v1/v2 payloads decode with
-     `prefab = nil`; a v3 payload's prefab survives encode→decode; version-branch field-count guards.
-   - the `_apply_name_colour` reconciliation if extracted (colour × foreign-dim).
-2. **luacheck 0/0** + **stylua --check** (the new CI gates).
-3. **`dst-mod-crash-audit` (full 6-dimension)** — codec v3 touches the cross-shard path that crashed
-   before (the bare-`tonumber` incident lived in this exact area), so a full re-audit is mandatory;
-   pay special attention to D4 (sandbox globals in the new modmain code + the debug fn) and D6 (the
-   prefab string field doesn't break decode / no owner-only-classified read for colour).
-4. **`partyhud-release-preflight` skill** before tagging — incl. the in-engine load-smoke **with a
-   connected player** (the `pause_when_empty` masking rule) and a **2-shard in-game test** to verify a
-   far teammate's real avatar arrives over the v3 blob and renders dimmed-but-correct.
-5. Ship **v2026.11** via the release CI (tag `v2026.11` → zip/tar.gz + GitHub Release), then public
-   Workshop upload + prod sync.
-
----
+## Testing & safety
+1. **busted** (pure modules): `partyhud_avatar` — classify; atlas_and_tex fallback table;
+   packidflags/unpackidflags bit round-trip; `identity_changed` (change vs no-change);
+   `resolve_avatar_style` (each value + unknown→off + never head-corner); `name_colour` (local; foreign
+   dim; nil/`{1,1,1,1}`→GREY). Optional `is_low_contrast` (exactly the 3 colours). (Codec round-trip
+   specs only if the contingency codec route is ever taken.)
+2. **luacheck 0/0** + **stylua --check**.
+3. **`dst-mod-crash-audit`** — lighter than usual: the feature adds CLIENT-side render only (no server
+   hook, no wire change), so the blast radius is the local client, not the shard. Still sweep the new
+   `UpdateBadges` identity-join + `SetAvatar` for nil/wrong-inst.
+4. **`partyhud-release-preflight`** before tagging — incl. the in-engine load-smoke with a connected
+   player, and a **2-shard in-game test** to confirm a far teammate's avatar + colour + ghost state
+   render correctly from `GetClientTable`.
+5. Ship **v2026.11** via the release CI (with the crash-guard, per its own spec).
 
 ## Out of scope / deferred
-
-- Animated-head skin fidelity beyond the base character head (full `base_skin` plumbing) — start with
-  what `GetPlayerBadgeData` gives; richer skin handling is a follow-up only if it looks wrong.
-- Audio / any non-visual cue.
-- Changing the existing HP/hunger/sanity/low-HP/cross-shard behaviour — this feature is additive.
+- **Codec-v3 prefab field** — kept as a *documented contingency* only for a same-shard mod-character
+  peer whose mod the receiver lacks (which itself degrades to `avatar_mod.tex`). Not implemented unless
+  the GetClientTable path proves insufficient in testing.
+- Full skin fidelity (`base_skin` clothing) on the animated head — start with the plain character head.
+- Colourblind remap / per-colour luminance clamp — DST has no colourblind mode to inherit; the drop
+  shadow suffices for the 3 low-contrast colours. Audio / non-visual cues. Changing existing behaviour.
 
 ## Open questions
-
-None blocking. The ship-default avatar style is chosen by the user after the in-game comparison; both
-styles ship as config options regardless.
+- Ship-default avatar style (after the in-game compare) — user decides.
+- Whether to ship the optional `Centred (flat)` 4th dropdown entry.
