@@ -67,6 +67,35 @@ local FIELD_SEP = ":"
 local REC_SEP = "|"
 local NUM_FIELDS = 9 -- v1 baseline: userid + 8 numerics (v2 = NUM_FIELDS + 1, adds origin)
 
+-- A de-dup set so a surprise out-of-range value logs ONCE per field name, not once per 0.5s payload.
+local _clamp_logged = {}
+
+-- clamp_num(v, lo, hi, name) -> clamped value, logging once if it was out of range. hi may be nil
+-- (no upper bound). Used at the decode boundary for the numerics whose out-of-range value would
+-- misrender. Clamps + KEEPS the record (structural rejection stays the job of the nil+reason returns).
+local function clamp_num(v, lo, hi, name)
+  local c = v
+  if lo ~= nil and c < lo then
+    c = lo
+  end
+  if hi ~= nil and c > hi then
+    c = hi
+  end
+  if c ~= v and not _clamp_logged[name] then
+    _clamp_logged[name] = true
+    print(
+      "[PartyHud] codec clamped out-of-range '"
+        .. name
+        .. "' ("
+        .. tostring(v)
+        .. " -> "
+        .. tostring(c)
+        .. "); further repeats suppressed"
+    )
+  end
+  return c
+end
+
 -- encode(records [, version]) -> string
 -- records: array of { userid=string, hp_cur, hp_max, hp_penalty, hunger,
 --                     sanity_cur, sanity_max, sanity_penalty, flags [, origin] }
@@ -169,12 +198,54 @@ function M.decode(str)
       if x == nil then
         return nil, "record " .. (i - 2) .. " field '" .. name .. "' is not a number"
       end
-      rec[name] = x
+      -- Decode-boundary clamp (Q3): the current-value fields would misrender if negative. Clamp them
+      -- to >= 0 and KEEP the record (structural rejection stays the job of the nil+reason returns).
+      -- Skip flags (unpackflags ignores undefined bits), sanity rate, origin, and the *_max/*_penalty
+      -- fields (already clamped by record.normalize_*'s max>0 clamp) -- the new yield is the cur>=0 floor.
+      if name == "hp_cur" or name == "hunger" or name == "sanity_cur" then
+        rec[name] = clamp_num(x, 0, nil, name)
+      else
+        rec[name] = x
+      end
     end
     records[#records + 1] = rec
   end
 
   return version, records
+end
+
+-- ============================================================================================
+-- STARTUP SELF-CHECK (Q4). Runs at require-time, inside the engine's xpcall (mods.lua), so a
+-- broken codec build (a bad NUM_FIELDS / NUMERIC / FLAGS / SUPPORTED / PROTOCOL_VERSION edit) fails
+-- LOUDLY here and disables the mod cleanly -- instead of failing silently inside the guarded() 2 Hz
+-- broadcast task, which would swallow it. Bare assert/tonumber are safe: this module is required into
+-- full _G, NOT modmain's restricted sandbox.
+-- ============================================================================================
+assert(SUPPORTED[M.PROTOCOL_VERSION], "PROTOCOL_VERSION " .. tostring(M.PROTOCOL_VERSION) .. " is not in SUPPORTED")
+do
+  -- encode->decode a probe record and assert it survives, so the wire format is provably coherent
+  -- before the first real broadcast.
+  local probe = {
+    {
+      userid = "KU_selfcheck",
+      hp_cur = 100,
+      hp_max = 150,
+      hp_penalty = 0,
+      hunger = 80,
+      sanity_cur = 120,
+      sanity_max = 200,
+      sanity_penalty = 0,
+      flags = 0,
+      origin = 1,
+    },
+  }
+  local ver, out = M.decode(M.encode(probe))
+  assert(ver == M.PROTOCOL_VERSION, "self-check: decoded version mismatch")
+  assert(out ~= nil and out[1] ~= nil, "self-check: probe failed to round-trip")
+  assert(
+    out[1].userid == "KU_selfcheck" and out[1].hp_cur == 100 and out[1].origin == 1,
+    "self-check: probe field mismatch"
+  )
 end
 
 return M

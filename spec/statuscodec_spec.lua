@@ -306,4 +306,61 @@ describe("partyhud status codec", function()
       assert.is_nil((codec.decode("2|1|KU_x:1:2:3:4:5:6:7:8:abc")))
     end)
   end)
+
+  describe("startup self-check (Q4)", function()
+    it("the current PROTOCOL_VERSION is in SUPPORTED", function()
+      -- require-time assert(SUPPORTED[PROTOCOL_VERSION]) guards a version bump without a SUPPORTED entry
+      local ver = codec.decode(codec.encode({}))
+      assert.are.equal(codec.PROTOCOL_VERSION, ver)
+    end)
+
+    it("a probe record survives an encode->decode round-trip at the default version", function()
+      local probe = {
+        {
+          userid = "KU_selfcheck",
+          hp_cur = 100,
+          hp_max = 150,
+          hp_penalty = 0,
+          hunger = 80,
+          sanity_cur = 120,
+          sanity_max = 200,
+          sanity_penalty = 0,
+          flags = 0,
+          origin = 1,
+        },
+      }
+      local ver, out = codec.decode(codec.encode(probe))
+      assert.are.equal(codec.PROTOCOL_VERSION, ver)
+      assert.are.same(probe, out)
+    end)
+  end)
+
+  describe("decode-boundary numeric clamps (Q3)", function()
+    it("clamps a negative hp_cur to 0 and KEEPS the record", function()
+      -- v1 hand-built string with hp_cur = -5 (field 1 after userid)
+      local ver, out = codec.decode("1|1|KU_x:-5:150:0:80:120:200:0:0")
+      assert.are.equal(1, ver)
+      assert.is_truthy(out)
+      assert.are.equal(0, out[1].hp_cur)
+    end)
+
+    it("clamps a negative hunger and sanity_cur to 0", function()
+      local _, out = codec.decode("1|1|KU_x:100:150:0:-3:-7:200:0:0")
+      assert.are.equal(0, out[1].hunger)
+      assert.are.equal(0, out[1].sanity_cur)
+    end)
+
+    it("leaves an in-range record untouched", function()
+      local _, out = codec.decode("1|1|KU_x:90:150:0:80:120:200:0:0")
+      assert.are.equal(90, out[1].hp_cur)
+      assert.are.equal(80, out[1].hunger)
+      assert.are.equal(120, out[1].sanity_cur)
+    end)
+
+    it("does NOT reject the whole payload on an out-of-range value", function()
+      -- structural errors still return nil; a clamped value must NOT
+      local ver = codec.decode("1|1|KU_x:-5:150:0:80:120:200:0:0")
+      assert.are.equal(1, ver)
+    end)
+  end)
 end)
