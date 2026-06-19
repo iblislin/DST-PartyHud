@@ -180,6 +180,31 @@ describe("partyhud_avatar — resolve_avatar_style", function()
   end)
 end)
 
+describe("partyhud_avatar — effective_avatar_style", function()
+  -- The centre head covers the thermal (HP-rate) arrow, so a LOCAL teammate whose thermal is active
+  -- temporarily renders as "corner" (head moves to the top-left inset) while configured as "centre".
+  it("centre config + thermal active -> corner (head moves out of the way of the arrow)", function()
+    assert.are.equal("corner", M.effective_avatar_style("centre", true))
+  end)
+
+  it("centre config + no thermal -> centre (the normal centred head)", function()
+    assert.are.equal("centre", M.effective_avatar_style("centre", false))
+  end)
+
+  it("corner config + thermal active -> corner (config wins; no flip, centre is already clear)", function()
+    assert.are.equal("corner", M.effective_avatar_style("corner", true))
+  end)
+
+  it("off config + thermal active -> off (never shows a head)", function()
+    assert.are.equal("off", M.effective_avatar_style("off", true))
+  end)
+
+  it("nil config -> off (nil-tolerant default)", function()
+    assert.are.equal("off", M.effective_avatar_style(nil, false))
+    assert.are.equal("off", M.effective_avatar_style(nil, true))
+  end)
+end)
+
 -- float-tolerant compare for the alpha arithmetic
 local function near(a, b)
   return math.abs(a - b) <= 1e-9

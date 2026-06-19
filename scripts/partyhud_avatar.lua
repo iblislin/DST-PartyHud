@@ -136,6 +136,23 @@ function M.resolve_avatar_style(config_value)
   return "off"
 end
 
+-- Resolve the EFFECTIVE (rendered) avatar style from the CONFIGURED style + whether a thermal
+-- (HP-rate / fire / overheat / freeze) arrow is currently active for a LOCAL teammate. In the
+-- "centre" style the animated head sits in the main ring centre and COVERS the thermal arrow
+-- (partybadge's self.hparrow), so while the arrow is up we temporarily render as "corner" (head
+-- moves to the top-left inset) to free the centre for the arrow; once thermal clears, "centre"
+-- is restored. Any other configured style is returned unchanged -- "corner" already keeps the
+-- centre clear (no flip needed, config wins), and "off" never shows a head. Foreign / far players
+-- never reach here with a truthy thermal flag (SetForeign force-hides the arrows and SetStatus
+-- gets false thermal for far players), so they naturally yield effective == config. Pure,
+-- nil-tolerant: a nil config falls to "off".
+function M.effective_avatar_style(config, thermal_active)
+  if config == "centre" and thermal_active then
+    return "corner"
+  end
+  return config or "off"
+end
+
 -- Centre-avatar head fit. GetPlayerBadgeData (skinsutils.lua:1903) returns scale (~0.23) / y_offset
 -- (~-50) TUNED FOR THE VANILLA SCOREBOARD avatar, where the head is nested under an icon scaled .8
 -- (playerbadge.lua:16 `self.icon:SetScale(.8)`) inside the scoreboard frame. PartyHud draws the head

@@ -166,7 +166,17 @@ local PartyBadge = Class(Badge, function(self, owner)
   -- on a prefab change (which IS in the snapshot); base_skin stays nil-vs-nil here (a no-op compare).
   self.player_colour = nil
   self.name_colour_enabled = false
+  -- avatar_style_config is the CONFIGURED style (off/corner/centre) chosen via SetAvatarStyle;
+  -- avatar_style is the EFFECTIVE (rendered) style SetAvatar reads. They differ only in the
+  -- centre-config case while a thermal arrow is active: effective flips to "corner" so the head
+  -- vacates the centre and the HP-rate arrow (self.hparrow) becomes visible. _apply_effective_style
+  -- reconciles the two (avatarmath.effective_avatar_style); _thermal_active tracks the live thermal
+  -- state (set in SetStatus); _last_avatar_args caches the last SetAvatar args so SetStatus can
+  -- re-render the head<->corner swap the moment thermal toggles.
+  self.avatar_style_config = "off"
   self.avatar_style = "off"
+  self._thermal_active = false
+  self._last_avatar_args = nil
   self.avatar_corner = nil -- flat Image child (corner style)
   self.avatar_head = nil -- animated UIAnim child (centre style)
   self._avatar_identity = nil
@@ -274,6 +284,10 @@ end
 -- The avatar children are created lazily so an "off" badge pays nothing. identity_changed gates the
 -- (cheaper-to-skip) texture/anim rebuild; alpha is always re-asserted (foreign flip is cheap).
 function PartyBadge:SetAvatar(prefab, idflags, is_foreign)
+  -- Cache the args so a later thermal toggle (in SetStatus) can re-render the head<->corner swap
+  -- without UpdateBadges supplying fresh args. Stored unconditionally (even for the "off" return
+  -- below) so the cache is always the latest call's view of this teammate.
+  self._last_avatar_args = { prefab = prefab, idflags = idflags, is_foreign = is_foreign }
   if self.avatar_style == "off" then
     self:_HideAvatars()
     return
@@ -379,11 +393,20 @@ function PartyBadge:SetAvatar(prefab, idflags, is_foreign)
   self._avatar_identity = new_identity
 end
 
--- v2026.11: set the avatar render style ("off"/"corner"/"centre"). Forces a rebuild next SetAvatar by
--- clearing the cached identity, and hides whichever child the new style does not use. Leaving the centre
--- style restores the configured HP-number visibility (centre forced it hover-only).
-function PartyBadge:SetAvatarStyle(style)
-  self.avatar_style = style or "off"
+-- v2026.11: reconcile the EFFECTIVE (rendered) style from {configured style, thermal active} and apply
+-- the side effects of a style CHANGE. The effective style is "corner" while centre-config + a thermal
+-- arrow is active (so the head vacates the centre for the HP-rate arrow), else the configured style
+-- (avatarmath.effective_avatar_style). Returns true iff the effective style actually changed (callers
+-- use this to decide whether to re-render). When it changes: force a rebuild next SetAvatar by clearing
+-- the cached identity, hide whichever child the new style does not use, and -- when leaving centre --
+-- restore the configured HP-number visibility (centre forced it hover-only). This body is the old
+-- SetAvatarStyle body, now keyed on the new EFFECTIVE self.avatar_style.
+function PartyBadge:_apply_effective_style()
+  local eff = avatarmath.effective_avatar_style(self.avatar_style_config, self._thermal_active)
+  if eff == self.avatar_style then
+    return false
+  end
+  self.avatar_style = eff
   self._avatar_identity = nil -- force the next SetAvatar to rebuild the texture/anim
   if self.avatar_style ~= "corner" and self.avatar_corner ~= nil then
     self.avatar_corner:Hide()
@@ -398,6 +421,16 @@ function PartyBadge:SetAvatarStyle(style)
     self._hp_number_was_hover = false
     self:_apply_hp_number_visibility(true)
   end
+  return true
+end
+
+-- v2026.11: set the CONFIGURED avatar render style ("off"/"corner"/"centre") from the client config,
+-- then reconcile the effective style. With no thermal active this is behaviour-identical to the old
+-- direct-set SetAvatarStyle (effective == config); while a centre-config teammate has thermal active,
+-- _apply_effective_style yields "corner" so the head does not cover the HP-rate arrow.
+function PartyBadge:SetAvatarStyle(style)
+  self.avatar_style_config = style or "off"
+  self:_apply_effective_style()
 end
 
 -- v2026.11 centre-avatar head-fit overrides (CLASS-level statics, shared by every badge). nil means
@@ -496,6 +529,21 @@ function PartyBadge:SetStatus(
       self.hparrow:GetAnimState():PlayAnimation(hparrowanim, true)
     end
     self.hparrow:Show()
+  end
+
+  -- v2026.11: the centre head sits in the ring centre and covers self.hparrow, so while a thermal
+  -- arrow is active a centre-config teammate must render as "corner" (head -> top-left inset) to free
+  -- the centre, then restore "centre" when thermal clears. Track the live thermal state regardless;
+  -- only re-render when the effective style actually changed (i.e. the centre-config case) and we have
+  -- args to re-render with. UpdateBadges calls SetAvatar BEFORE SetStatus each refresh, so this corrects
+  -- the avatar within the same pass.
+  local thermal = (onfire or overheating or freezing) and true or false
+  if thermal ~= self._thermal_active then
+    self._thermal_active = thermal
+    if self:_apply_effective_style() and self._last_avatar_args ~= nil then
+      local a = self._last_avatar_args
+      self:SetAvatar(a.prefab, a.idflags, a.is_foreign)
+    end
   end
 end
 
