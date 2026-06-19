@@ -61,8 +61,9 @@ Avatars + name colour are the highest-value visual differentiator and a common c
 
 ### New pure module `scripts/partyhud_avatar.lua` (busted-tested)
 Pure, engine-free decision logic (same pattern as `partyhud_layout`/`_record`/etc.):
-- `M.classify(prefab, dst_charlist, mod_charlist)` → `"base"|"mod"|"random"|"unknown"` — mirrors
-  `characterutil.lua:82-87` (non-empty unknown name → the `mod` fallback bucket; nil/`""` → `unknown`).
+- `M.classify(prefab, dst_charlist, mod_charlist)` → `"base"|"mod"|"random"|"unknown_named"|"unknown"` —
+  mirrors `characterutil.lua:82-87` (a non-empty but unregistered name → `unknown_named` → renders the
+  generic `avatar_mod.tex` head; nil/`""` → `unknown` → renders `avatar_unknown.tex`).
 - `M.atlas_and_tex(prefab, classify_result, mod_avatar_locations)` → `(atlas, tex)` — the fallback
   table (base/random→`images/avatars.xml`+`avatar_<p>.tex`; registered-mod→`mod_loc`+`avatar_<p>.tex`;
   unregistered→`avatar_mod.tex`; unknown→`avatar_unknown.tex`).
