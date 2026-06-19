@@ -111,9 +111,12 @@ function M.unpackidflags(n)
   }
 end
 
--- Cheap per-refresh change-gate for the badge's avatar rebuild. prev/new are
--- { prefab, idflags, base_skin } snapshots. nil prev (first build) -> always changed. base_skin is
--- compared with an "" coercion so nil-vs-nil and nil-vs-"" read equal (a base char with no skin set).
+-- Cheap per-refresh change-gate for the badge's avatar rebuild. prev/new are { prefab, idflags }
+-- snapshots; a base_skin field is also accepted (future-proofing) and compared with an "" coercion
+-- so nil-vs-nil and nil-vs-"" read equal (a base char with no skin set). PartyHud does NOT track
+-- per-teammate skins -- the widget snapshots only {prefab, idflags} and derives base_build as
+-- prefab.."_none", so base_skin is always nil-vs-nil here (a no-op) and a base-build change only
+-- happens on a prefab change, which IS compared. nil prev (first build) -> always changed.
 function M.identity_changed(prev, new)
   if prev == nil then
     return true

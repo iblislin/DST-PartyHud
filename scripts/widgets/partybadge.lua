@@ -159,8 +159,11 @@ local PartyBadge = Class(Badge, function(self, owner)
   -- v.playercolour, or the GetClientTable colour for a foreign player); nil until set per refresh.
   -- name_colour_enabled gates the feature (config name_colour); when false the name stays white-at-alpha
   -- exactly like pre-v2026.11. avatar_style is "off"/"corner"/"centre"; the avatar children are created
-  -- lazily by SetAvatar. _avatar_identity caches the last-rendered {prefab,idflags,base_skin} snapshot
-  -- so SetAvatar can skip a rebuild when identity is unchanged (avatarmath.identity_changed).
+  -- lazily by SetAvatar. _avatar_identity caches the last-rendered {prefab, idflags} snapshot so
+  -- SetAvatar can skip a rebuild when identity is unchanged (avatarmath.identity_changed). NOTE:
+  -- identity_changed also accepts a base_skin field (future-proofing), but PartyHud does NOT track
+  -- per-teammate skins -- base_build is derived as prefab.."_none", so a base-build change only happens
+  -- on a prefab change (which IS in the snapshot); base_skin stays nil-vs-nil here (a no-op compare).
   self.player_colour = nil
   self.name_colour_enabled = false
   self.avatar_style = "off"
@@ -371,7 +374,10 @@ function PartyBadge:SetPercent(cur, max, penaltypercent)
   self.hptopper:GetAnimState():SetPercent("anim", 1 - (penaltypercent or 0))
   if self.num ~= nil then
     self.num:SetString(tostring(math.floor(cur + 0.5)))
-    if self.hp_number_always then
+    -- honour the centre style's forced-hover-only: _hp_number_was_hover gates the re-show so a
+    -- per-refresh SetPercent can't reveal the HP number over the centre head (cleared by
+    -- SetAvatarStyle when leaving centre, so corner/off get the number back).
+    if self.hp_number_always and not self._hp_number_was_hover then
       self.num:Show()
     end
   end
@@ -604,7 +610,9 @@ function PartyBadge:ShowBadge()
   end
   self:_apply_frame_colour() -- reconcile the border tint on reveal, so it never depends on a
   -- caller happening to run SetPercent right after ShowBadge
-  if self.num ~= nil and self.hp_number_always then
+  -- honour the centre style's forced-hover-only here too: _hp_number_was_hover gates the re-show so
+  -- ShowBadge can't reveal the HP number over the centre head (cleared by SetAvatarStyle on leaving centre).
+  if self.num ~= nil and self.hp_number_always and not self._hp_number_was_hover then
     self.num:Show()
   end
   self.name:Show()
