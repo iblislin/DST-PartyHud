@@ -95,10 +95,47 @@ end
 bare by `modutil.lua:153`), the netvar-dirty handlers, `PartyBadge:OnUpdate`. Optional `guarded()` on
 `UpdateBadges` hardens the local HUD cheaply — polish, not a server-safety item. Include if low-cost.
 
+### Foreign-data staleness heartbeat (Q5 — hide stale cross-shard badges) — FOLD IN
+A guard catches a *throw*; it does NOT catch a broadcast task that wedges/stops silently — and that case
+actively misinforms (stale HP is worse than no badge). Verified: LOCAL badges read live per-player
+netvars every refresh, independent of the broadcast (a guarded broadcast-skip leaves them correct; a
+guarded *event-hook* skip freezes one field on one player, bounded + self-healing on the next delta — so
+**leave local badges always-on**). But FOREIGN badges FREEZE if the broadcast task stops: the TTL
+`crossshard.expire` (`XSHARD_TTL=3`) AND the carrier `:set` both live INSIDE the 0.5s task
+(`modmain.lua:996`/`1034`), so a wedged task means `expire` never runs, the `net_string` never changes
+(no dirty event), and `client_foreign_records` (written only at `modmain.lua:1070`) stays frozen at stale
+HP for minutes.
+- **Fix (~6 lines, client-only, cannot crash the shard):** stamp `last_foreign_blob_time = GLOBAL.GetTime()`
+  where the carrier-dirty handler sets `client_foreign_records` (`modmain.lua:1070`); add a freshness
+  clause to the foreign-append guard (`modmain.lua:538`):
+  `(GLOBAL.GetTime() - last_foreign_blob_time) <= FOREIGN_STALE_SECS`, with `FOREIGN_STALE_SECS = 5`
+  (10× the 0.5s cadence, > the 3s server TTL — biased against false-positive hiding). When the block is
+  skipped, the EXISTING trailing-slot clear (`modmain.lua:622-629`) runs `SetForeign(false)`/`HideBadge()`
+  on those slots, so stale foreign badges vanish with NO new clear code. Log once (`_logged`-style):
+  "PartyHud foreign data stale, hiding cross-shard badges".
+- This **complements** `guarded()` (catches throws); the heartbeat catches the silently-stopped publish a
+  throw-guard cannot. Why NOT a server `net_bool` "degraded" flag: see Out of scope.
+
 ### What NOT to guard
 Post-init bodies (engine already xpcall-wraps them — redundant); the pure busted-tested modules
 (`partyhud_record`/`_crossshard`/`_badge`/`_layout`/`_status` — guard their *callers*, not the leaves);
 `StartThread` (none used); `modassert`/`moderror` (they re-raise — wrong tool for keep-running).
+
+### Decode-boundary value validation (Q3 — clamp surprise values, never throw) — FOLD IN
+The decoder is where untrusted cross-shard bytes enter. It already validates STRUCTURE (field count,
+version, `tonumber`) and returns `nil + reason` (never throws). Add value-range clamping for the fields
+whose out-of-range value would misrender — but **clamp-and-log-once and KEEP the record**; reserve
+whole-payload rejection for the structural errors decode already handles.
+- **Do (real exposure):** clamp the numerics — `hp_cur`/`hunger`/`sanity_cur` to `>= 0`, penalties to
+  `0..100` (mostly already done by `record.normalize_*`'s `max>0` clamp; add the `cur>=0`). A small
+  `clamp_num(v, lo, hi)` helper inline at the decode boundary (`partyhud_statuscodec.lua` after
+  `rec[name]=x`), with the same `_logged` de-dup as the guard.
+- **Skip (already safe — log-noise only):** `flags` (`unpackflags` reads only the 5 defined bits, ignores
+  the rest); `sanity rate` (an out-of-set value already yields `nil` from `SANITY_RATE_ANIM[]` → arrow
+  hidden); `origin` (leave `nil` — a v1 peer legitimately has none).
+- **Trust-model caveat:** both shards `require` the same module and encode from the server's own netvars
+  — no malicious/divergent producer — so this is belt-and-suspenders, not correctness. The numeric clamps
+  are the only part with real yield; the enum/flags clamp-logging is out of scope (below).
 
 ### Surfacing on a dedicated server (no screen)
 `GLOBAL.print` reaches the server log. Optionally a fire-once `GLOBAL.TheNet:Announce("PartyHud
@@ -140,7 +177,29 @@ on a dedicated server).
    registered on the sim-time scheduler or the event bus must be wrapped at the point it is
    registered — being inside a (protected) post-init does not protect the (naked) closures it
    installs."** Plus the player-connected-smoke requirement.
+6. **Startup codec self-check (Q4 — code + gate, ~6 lines).** At the bottom of
+   `partyhud_statuscodec.lua` (before `return M`): `assert(SUPPORTED[PROTOCOL_VERSION])` + an
+   `encode→decode` round-trip on a probe record asserting it survives. A broken codec build (someone
+   edits `NUM_FIELDS`/`NUMERIC`/`FLAGS`/`SUPPORTED`) then fails LOUDLY at require-time — inside the
+   engine's xpcall (`mods.lua`), so the mod disables cleanly + logs — instead of silently inside the
+   now-`guarded()` 2 Hz task (which would swallow it). Bare `assert`/`tonumber` are safe here: the codec
+   is `require`d into full `_G`, not modmain's sandbox. Pairs with `spec/statuscodec_spec.lua` (the same
+   round-trip, run under busted).
 
 ## Out of scope / deferred
-- Auto-disabling the mod on repeated errors (the engine offers no runtime hook; de-dup logging suffices).
+- **Auto-disabling the mod on repeated errors** — the engine offers no runtime hook; de-dup logging + the
+  Q5 staleness heartbeat (which hides the misleading data) suffice.
+- **A server-signalled `net_bool` "degraded" kill switch** — you cannot reliably `:set()` a flag from
+  inside the very task that wedged (the signal you need most is the one you can't send); the client-side
+  staleness heartbeat supersedes it and adds no new netvar surface (which would also have to be declared
+  identically on server + client).
+- **`readonly()` proxy on the `FLAGS`/`PROTOCOL_VERSION`/`SUPPORTED` constant tables (Q1/Q2)** — they are
+  defined-once + never mutated; DST freezes none of its own constant tables. Zero safety gain. Lua 5.1
+  has no `const` for locals (that's 5.4), so the `GLOBAL.pcall`/`xpcall`/`traceback` aliases stay plain
+  locals — luacheck `std="lua51"` (already in the 0/0 gate) covers accidental reassignment.
+- **Full per-message / per-field range validation + sampling (Q4)** — defends a threat the same-module
+  same-cluster deployment doesn't have; pure 2 Hz cost. The cheap boundary checks (already present) + the
+  startup self-check are the right amount.
+- **enum/flags clamp-logging (Q3)** — the renderer already degrades safely on a bad rate/flag, so this is
+  log-noise; only the numeric clamps have real yield.
 - Any change to the avatars/name-colour feature (orthogonal; same release only).
