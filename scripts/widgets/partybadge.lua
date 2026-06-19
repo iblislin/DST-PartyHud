@@ -213,17 +213,32 @@ function PartyBadge:SetSubGauges(enabled)
   end
 end
 
+-- v2026.11: single-writer for the HP number's visibility, reconciling {hp_number_always config,
+-- centre-style forced-hover-only}. Every site that wants to reveal/hide the HP number for this reason
+-- routes through here (same single-writer model as _apply_name_colour / _apply_frame_colour) so the
+-- guard `hp_number_always and not _hp_number_was_hover` can never be open-coded inconsistently again.
+--   allow_hide=true  -> full apply: Show when the decision is "show", else Hide (the SetHPNumberAlways
+--                       / leaving-centre / centre-forces-hover sites, which used to Show OR Hide).
+--   allow_hide=false -> show-only: Show when the decision is "show", do NOTHING otherwise (the
+--                       SetPercent / ShowBadge sites, which only ever :Show()'d and left the prior
+--                       hover/default hide in place -- preserving that exact effect, no new forced Hide).
+-- The dead-state hide in ShowDead is a separate concern (not driven by these flags) and stays inline.
+function PartyBadge:_apply_hp_number_visibility(allow_hide)
+  if self.num == nil then
+    return
+  end
+  if self.hp_number_always and not self._hp_number_was_hover then
+    self.num:Show()
+  elseif allow_hide then
+    self.num:Hide()
+  end
+end
+
 -- Whether the main HP number is always shown, or only on hover (client config hp_number).
 -- The HP ring fill is always visible either way; this only gates the number.
 function PartyBadge:SetHPNumberAlways(always)
   self.hp_number_always = always
-  if self.num ~= nil then
-    if always then
-      self.num:Show()
-    else
-      self.num:Hide()
-    end
-  end
+  self:_apply_hp_number_visibility(true) -- full apply: Show when configured-on, else Hide
 end
 
 function PartyBadge:SetName(namestring)
@@ -239,6 +254,18 @@ function PartyBadge:SetPlayerColour(colour, enabled)
   self:_apply_name_colour()
 end
 
+-- v2026.11: hide both avatar children if they exist. The same two-line idiom appeared in SetAvatar's
+-- "off" branch, HideBadge, and ShowDead; centralized here (behaviour-identical). Each child is created
+-- lazily so the nil-guards stay.
+function PartyBadge:_HideAvatars()
+  if self.avatar_corner ~= nil then
+    self.avatar_corner:Hide()
+  end
+  if self.avatar_head ~= nil then
+    self.avatar_head:Hide()
+  end
+end
+
 -- v2026.11: render the teammate's avatar for the current style. Called per refresh from UpdateBadges.
 --   prefab    : character prefab string (local v.prefab, or the GetClientTable record prefab); nil -> unknown
 --   idflags   : packed ghost + character-state bits (avatarmath.packidflags / a raw userflags int)
@@ -248,12 +275,7 @@ end
 -- (cheaper-to-skip) texture/anim rebuild; alpha is always re-asserted (foreign flip is cheap).
 function PartyBadge:SetAvatar(prefab, idflags, is_foreign)
   if self.avatar_style == "off" then
-    if self.avatar_corner ~= nil then
-      self.avatar_corner:Hide()
-    end
-    if self.avatar_head ~= nil then
-      self.avatar_head:Hide()
-    end
+    self:_HideAvatars()
     return
   end
   local a = (is_foreign and FOREIGN_ALPHA) or FULL_ALPHA
@@ -334,10 +356,11 @@ function PartyBadge:SetAvatar(prefab, idflags, is_foreign)
     self.avatar_head:GetAnimState():SetMultColour(1, 1, 1, a)
     self.avatar_head:Show()
     -- HP number is hover-only while the centre head is up, so the face is unobstructed. Restored by
-    -- SetAvatarStyle("off"/"corner") via the hp_number_always reset below.
-    if self.num ~= nil and not self._hp_number_was_hover then
+    -- SetAvatarStyle("off"/"corner") via the _hp_number_was_hover reset below. Set the flag, then let
+    -- the single-writer hide (decision becomes false once the flag is true; allow_hide=true performs it).
+    if not self._hp_number_was_hover then
       self._hp_number_was_hover = true
-      self.num:Hide()
+      self:_apply_hp_number_visibility(true)
     end
   end
   self._avatar_identity = new_identity
@@ -355,10 +378,12 @@ function PartyBadge:SetAvatarStyle(style)
   if self.avatar_style ~= "centre" and self.avatar_head ~= nil then
     self.avatar_head:Hide()
   end
-  -- leaving the centre style: restore the configured HP-number visibility (centre forced it hover-only)
+  -- leaving the centre style: restore the configured HP-number visibility (centre forced it hover-only).
+  -- Clear the flag, then full-apply through the single-writer (Show when configured-on, else Hide) --
+  -- same effect as the old SetHPNumberAlways(self.hp_number_always) call, without re-setting the config.
   if self.avatar_style ~= "centre" and self._hp_number_was_hover then
     self._hp_number_was_hover = false
-    self:SetHPNumberAlways(self.hp_number_always)
+    self:_apply_hp_number_visibility(true)
   end
 end
 
@@ -374,13 +399,13 @@ function PartyBadge:SetPercent(cur, max, penaltypercent)
   self.hptopper:GetAnimState():SetPercent("anim", 1 - (penaltypercent or 0))
   if self.num ~= nil then
     self.num:SetString(tostring(math.floor(cur + 0.5)))
-    -- honour the centre style's forced-hover-only: _hp_number_was_hover gates the re-show so a
-    -- per-refresh SetPercent can't reveal the HP number over the centre head (cleared by
-    -- SetAvatarStyle when leaving centre, so corner/off get the number back).
-    if self.hp_number_always and not self._hp_number_was_hover then
-      self.num:Show()
-    end
   end
+  -- honour the centre style's forced-hover-only: the single-writer re-shows the HP number only when
+  -- hp_number_always and not _hp_number_was_hover, so a per-refresh SetPercent can't reveal it over the
+  -- centre head (cleared by SetAvatarStyle when leaving centre, so corner/off get the number back).
+  -- show-only (allow_hide=false): preserves the old site's "only ever :Show()'d" effect -- the focus/
+  -- hover or config-off hide stays in place; no new forced Hide is introduced.
+  self:_apply_hp_number_visibility(false)
   -- v2026.9 low-HP alert: blink the border below the configured threshold (fraction of max HP).
   -- 0 threshold = disabled. Runs for BOTH the local and the foreign path (the foreign render also
   -- calls SetPercent with the relayed hp_cur/hp_max), so far/cross-shard badges blink for free.
@@ -591,12 +616,7 @@ end
 
 function PartyBadge:HideBadge()
   self:_set_low_hp(false) -- stop any blink task before hiding a departed / empty slot
-  if self.avatar_corner ~= nil then
-    self.avatar_corner:Hide()
-  end
-  if self.avatar_head ~= nil then
-    self.avatar_head:Hide()
-  end
+  self:_HideAvatars()
   self:Hide()
 end
 
@@ -610,11 +630,11 @@ function PartyBadge:ShowBadge()
   end
   self:_apply_frame_colour() -- reconcile the border tint on reveal, so it never depends on a
   -- caller happening to run SetPercent right after ShowBadge
-  -- honour the centre style's forced-hover-only here too: _hp_number_was_hover gates the re-show so
-  -- ShowBadge can't reveal the HP number over the centre head (cleared by SetAvatarStyle on leaving centre).
-  if self.num ~= nil and self.hp_number_always and not self._hp_number_was_hover then
-    self.num:Show()
-  end
+  -- honour the centre style's forced-hover-only here too: the single-writer re-shows the HP number only
+  -- when hp_number_always and not _hp_number_was_hover, so ShowBadge can't reveal it over the centre head
+  -- (cleared by SetAvatarStyle on leaving centre). show-only (allow_hide=false): same as the old site,
+  -- which only ever :Show()'d -- the focus/hover or config-off hide is left untouched.
+  self:_apply_hp_number_visibility(false)
   self.name:Show()
   -- only reveal the sub-rings when they're enabled (their numbers stay hover-only)
   if self.subvisible then
@@ -649,12 +669,7 @@ function PartyBadge:ShowDead()
   self.hparrow:Hide()
   self.hparrow_cur = nil
   -- a dead teammate shows the skull, which is mutually exclusive with the centre/corner avatar.
-  if self.avatar_corner ~= nil then
-    self.avatar_corner:Hide()
-  end
-  if self.avatar_head ~= nil then
-    self.avatar_head:Hide()
-  end
+  self:_HideAvatars()
   self.dead:Show()
 end
 

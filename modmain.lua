@@ -83,8 +83,10 @@ local second_row_cols = 0 -- client-local: how many of OUR leading columns the t
 local second_row_reserve = 0 -- client-local: how far down to push those columns (= the DEEPEST active second-row badge's need; MOISTURE_TOP_RESERVE, or INSPIRATION_TOP_RESERVE when Wigfrid's deeper inspiration badge is present).
 local last_bpmode = -1 -- client-local: last applied backpack UI mode (see backpack_layout_mode); a 0.5s poll re-lays-out on change (right-click open/close + the integrated-backpack setting toggle fire NO event).
 -- v2026.11: runtime avatar style int, seeded from config (avatar_style_cfg above). The
--- PartyHud_AvatarStyle console fn overrides it at runtime (modtest compare). resolve_avatar_style maps
--- nil/this int -> "off"/"corner"/"centre".
+-- PartyHud_AvatarStyle console fn overrides it at runtime (modtest compare). Read by the construct loop
+-- (resolved to "off"/"corner"/"centre" via avatarmath.resolve_avatar_style and pushed to each new badge)
+-- and by that console fn -- NOT by UpdateBadges, which reads the per-badge self.avatar_style set by
+-- SetAvatarStyle. resolve_avatar_style maps nil/this int -> "off"/"corner"/"centre".
 local current_avatar_style = avatar_style_cfg
 
 --imports partybadge
@@ -411,14 +413,16 @@ end
 
 -- [DEBUG/util] runtime avatar-style switch from the client console, no reconnect needed:
 --   PartyHud_AvatarStyle("off"|"corner"|"centre")  -> set the style and relayout the live badges
--- Sets the module-level current_avatar_style (UpdateBadges + SetAvatarStyle read it) and re-applies to
--- every live badge, then forces a refresh so the avatars rebuild. Client-only (ThePlayer/HUD nil on a
--- dedicated server -> no-op). Returns the style string applied.
+-- Validates the input string against the 3 known values and passes it straight to SetAvatarStyle (an
+-- unknown / nil value falls to "off", matching the prior int-0 default). Mirrors the int into the
+-- module-level current_avatar_style for the construct loop (which reads it for newly-built badges; NOT
+-- read by UpdateBadges). Re-applies to every live badge, then forces a refresh so the avatars rebuild.
+-- Client-only (ThePlayer/HUD nil on a dedicated server -> no-op). Returns the style string applied.
 -- luacheck: push ignore 122
 GLOBAL.PartyHud_AvatarStyle = function(style)
   local map = { off = 0, corner = 1, centre = 2 }
-  current_avatar_style = map[style] or 0
-  local resolved = avatarmath.resolve_avatar_style(current_avatar_style)
+  current_avatar_style = map[style] or 0 -- int mirror for the construct loop
+  local resolved = (map[style] ~= nil) and style or "off" -- validated style string (no int round-trip)
   local p = _G.ThePlayer
   local sd = p ~= nil and p.HUD ~= nil and p.HUD.controls ~= nil and p.HUD.controls.status or nil
   if sd ~= nil and sd.badgearray ~= nil then
