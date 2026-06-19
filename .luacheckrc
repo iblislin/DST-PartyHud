@@ -23,6 +23,10 @@ read_globals = {
   "BODYTEXTFONT", "TALKINGFONT", "TITLEFONT", "NEWFONT", "CHATFONT",
   "ANCHOR_MIDDLE", "ANCHOR_LEFT", "ANCHOR_RIGHT", "ANCHOR_TOP", "ANCHOR_BOTTOM",
   "Lerp", -- DST math global (mathutil.lua), injected into the mod env
+  "DST_CHARACTERLIST", "MODCHARACTERLIST", "MOD_AVATAR_LOCATIONS", -- character lists / mod avatar dirs (avatar render)
+  "GetPlayerBadgeData", "SetSkinsOnAnim", "GetSkinData", -- animated-head helpers (skinsutils / components/skinner)
+  "FACING_DOWN", -- UIAnim facing constant (animated head)
+  "Profile", -- client save-data global (Profile:GetAnimatedHeadsEnabled for the animated-head perf parity)
 }
 
 -- modmain.lua does `_G = GLOBAL`

@@ -11,6 +11,10 @@ local UIAnim = require("widgets/uianim")
 -- extracted so it can be busted-tested with zero engine deps. The widget reads its live state and
 -- delegates the arithmetic here, keeping ownership of the engine calls.
 local badgemath = require("partyhud_badge")
+-- v2026.11: pure avatar / name-colour decision logic (classify + atlas/tex fallback + idflags +
+-- name_colour reconciliation), extracted so it can be busted-tested with zero engine deps. The widget
+-- reads its live state (player colour, foreign flag) and delegates the arithmetic here.
+local avatarmath = require("partyhud_avatar")
 
 -- canonical DST badge tints (from widgets/healthbadge.lua, hungerbadge.lua, sanitybadge.lua):
 -- health red, hunger gold, sanity ORANGE (the blue {191,232,240} is the lunacy variant, not normal sanity)
@@ -36,6 +40,13 @@ local SANITY_RATE_ANIM = {
 local SUB_SCALE = 0.5
 local SUB_Y = -42
 local SUB_X = 17
+
+-- v2026.11 corner avatar: a small flat head inset in the badge's top-LEFT corner so it does not collide
+-- with the HP number (centre) or the sub-rings (bottom). Scale + offset visually tuned to sit just
+-- inside the ring backing. The foreign-label (+50) / name (+40) sit above and do not overlap.
+local AVATAR_CORNER_SCALE = 0.45
+local AVATAR_CORNER_X = -20
+local AVATAR_CORNER_Y = 18
 
 local PartyBadge = Class(Badge, function(self, owner)
   -- modern health badge: anim=nil -> status_meter path; iconbuild "status_health"
@@ -143,6 +154,20 @@ local PartyBadge = Class(Badge, function(self, owner)
   self.low_hp_threshold = 0
   self.low_hp = false
   self._blink_t = 0 -- pulse phase accumulator (seconds); advanced in OnUpdate while low
+
+  -- v2026.11 avatar + name-colour state. player_colour is the teammate's {r,g,b,a} (local
+  -- v.playercolour, or the GetClientTable colour for a foreign player); nil until set per refresh.
+  -- name_colour_enabled gates the feature (config name_colour); when false the name stays white-at-alpha
+  -- exactly like pre-v2026.11. avatar_style is "off"/"corner"/"centre"; the avatar children are created
+  -- lazily by SetAvatar. _avatar_identity caches the last-rendered {prefab,idflags,base_skin} snapshot
+  -- so SetAvatar can skip a rebuild when identity is unchanged (avatarmath.identity_changed).
+  self.player_colour = nil
+  self.name_colour_enabled = false
+  self.avatar_style = "off"
+  self.avatar_corner = nil -- flat Image child (corner style)
+  self.avatar_head = nil -- animated UIAnim child (centre style)
+  self._avatar_identity = nil
+  self._hp_number_was_hover = false -- centre style forces the HP number hover-only; this tracks it
 end)
 
 -- v2026.8: dim alpha applied to every visible badge element when the slot shows a FOREIGN
@@ -200,6 +225,138 @@ end
 
 function PartyBadge:SetName(namestring)
   self.name:SetString(namestring)
+  self:_apply_name_colour() -- re-assert the colour after a string change (string set does not touch colour)
+end
+
+-- v2026.11: set this badge's teammate player colour + whether name colouring is enabled, then
+-- re-apply. colour is {r,g,b,a} or nil (not-ready -> GREY). Called per refresh from UpdateBadges.
+function PartyBadge:SetPlayerColour(colour, enabled)
+  self.player_colour = colour
+  self.name_colour_enabled = enabled and true or false
+  self:_apply_name_colour()
+end
+
+-- v2026.11: render the teammate's avatar for the current style. Called per refresh from UpdateBadges.
+--   prefab    : character prefab string (local v.prefab, or the GetClientTable record prefab); nil -> unknown
+--   idflags   : packed ghost + character-state bits (avatarmath.packidflags / a raw userflags int)
+--   is_foreign: dims to FOREIGN_ALPHA (data ~1s stale), matching the rest of the badge
+-- style is set separately via SetAvatarStyle (config-driven); SetAvatar is a no-op when style == "off".
+-- The avatar children are created lazily so an "off" badge pays nothing. identity_changed gates the
+-- (cheaper-to-skip) texture/anim rebuild; alpha is always re-asserted (foreign flip is cheap).
+function PartyBadge:SetAvatar(prefab, idflags, is_foreign)
+  if self.avatar_style == "off" then
+    if self.avatar_corner ~= nil then
+      self.avatar_corner:Hide()
+    end
+    if self.avatar_head ~= nil then
+      self.avatar_head:Hide()
+    end
+    return
+  end
+  local a = (is_foreign and FOREIGN_ALPHA) or FULL_ALPHA
+  local new_identity = { prefab = prefab, idflags = idflags or 0 }
+  local changed = avatarmath.identity_changed(self._avatar_identity, new_identity)
+
+  if self.avatar_style == "corner" then
+    if self.avatar_head ~= nil then
+      self.avatar_head:Hide()
+    end
+    if self.avatar_corner == nil then
+      self.avatar_corner = self:AddChild(Image(avatarmath.DEFAULT_ATLAS, "avatar_unknown.tex"))
+      self.avatar_corner:SetScale(AVATAR_CORNER_SCALE)
+      self.avatar_corner:SetPosition(AVATAR_CORNER_X, AVATAR_CORNER_Y, 0)
+      self.avatar_corner:SetClickable(false)
+    end
+    if changed then
+      -- classify needs the engine character lists / mod avatar locations; read them here (engine
+      -- side) and delegate the bucket + atlas/tex to the pure module.
+      local cls = avatarmath.classify(prefab, DST_CHARACTERLIST, MODCHARACTERLIST)
+      local atlas, tex = avatarmath.atlas_and_tex(prefab, cls, MOD_AVATAR_LOCATIONS)
+      self.avatar_corner:SetTexture(atlas, tex)
+    end
+    self.avatar_corner:SetTint(1, 1, 1, a)
+    self.avatar_corner:Show()
+  end
+
+  if self.avatar_style == "centre" then
+    if self.avatar_corner ~= nil then
+      self.avatar_corner:Hide()
+    end
+    if self.avatar_head == nil then
+      -- animated head child, ported from playerbadge.lua:_SetupHeads + Set. Parented to the badge
+      -- (not underNumber) so it draws above the ring fill; clickable off (purely cosmetic). SetFacing
+      -- is a UIAnim method (forwards to UITransform:SetFacing) -- NOT on the animstate; the symbol
+      -- Hide() calls ARE on the animstate (matches playerbadge.lua:36-42).
+      self.avatar_head = self:AddChild(UIAnim())
+      self.avatar_head:SetFacing(FACING_DOWN)
+      self.avatar_head:GetAnimState():Hide("ARM_carry")
+      self.avatar_head:GetAnimState():Hide("HAIR_HAT")
+      self.avatar_head:GetAnimState():Hide("HEAD_HAT")
+      self.avatar_head:GetAnimState():Hide("HEAD_HAT_NOHELM")
+      self.avatar_head:GetAnimState():Hide("HEAD_HAT_HELM")
+      self.avatar_head:SetClickable(false)
+    end
+    if changed then
+      local f = avatarmath.unpackidflags(idflags)
+      -- GetPlayerBadgeData (skinsutils.lua:1903) -> bank/anim/skin_mode/scale/y_offset for this
+      -- character's ghost / were / stage pose. nil prefab -> "wilson" default head (the engine fn
+      -- branches only on known characters, so an unknown prefab takes the generic else branch).
+      local bank, animation, skin_mode, scale, y_offset =
+        GetPlayerBadgeData(prefab, f.ghost, f.state1, f.state2, f.state3)
+      local hs = self.avatar_head:GetAnimState()
+      hs:SetBank(bank)
+      hs:PlayAnimation(animation, true)
+      -- per-badge perf parity with the vanilla scoreboard: animate only if the profile enables it,
+      -- else freeze on frame 0 (N badges animating is the cost the dropped head-corner combo avoided).
+      -- bare Profile (NOT GLOBAL.Profile): partybadge runs in full _G, where GLOBAL is undefined.
+      if Profile ~= nil and Profile.GetAnimatedHeadsEnabled ~= nil and Profile:GetAnimatedHeadsEnabled() then
+        hs:SetTime(math.random() * 1.5)
+      else
+        hs:SetTime(0)
+        hs:Pause()
+      end
+      self.avatar_head:SetScale(scale)
+      self.avatar_head:SetPosition(0, y_offset, 0)
+      -- base build / skin: GetSkinData(base_skin or prefab.."_none") -> skins[skin_mode]; SetSkinsOnAnim
+      -- (components/skinner.lua:11, a GLOBAL) puts the base build on the anim. base_skin defaults handled
+      -- by SetSkinsOnAnim; pass the plain character head (full skin fidelity is out of scope).
+      local prefabname = (prefab ~= nil and prefab ~= "" and prefab) or "wilson"
+      local skindata = GetSkinData((prefab and (prefab .. "_none")) or "wilson_none")
+      local base_build = prefabname
+      if skindata ~= nil and skindata.skins ~= nil then
+        base_build = skindata.skins[skin_mode] or prefabname
+      end
+      SetSkinsOnAnim(hs, prefabname, base_build, {}, nil, skin_mode)
+    end
+    self.avatar_head:GetAnimState():SetMultColour(1, 1, 1, a)
+    self.avatar_head:Show()
+    -- HP number is hover-only while the centre head is up, so the face is unobstructed. Restored by
+    -- SetAvatarStyle("off"/"corner") via the hp_number_always reset below.
+    if self.num ~= nil and not self._hp_number_was_hover then
+      self._hp_number_was_hover = true
+      self.num:Hide()
+    end
+  end
+  self._avatar_identity = new_identity
+end
+
+-- v2026.11: set the avatar render style ("off"/"corner"/"centre"). Forces a rebuild next SetAvatar by
+-- clearing the cached identity, and hides whichever child the new style does not use. Leaving the centre
+-- style restores the configured HP-number visibility (centre forced it hover-only).
+function PartyBadge:SetAvatarStyle(style)
+  self.avatar_style = style or "off"
+  self._avatar_identity = nil -- force the next SetAvatar to rebuild the texture/anim
+  if self.avatar_style ~= "corner" and self.avatar_corner ~= nil then
+    self.avatar_corner:Hide()
+  end
+  if self.avatar_style ~= "centre" and self.avatar_head ~= nil then
+    self.avatar_head:Hide()
+  end
+  -- leaving the centre style: restore the configured HP-number visibility (centre forced it hover-only)
+  if self.avatar_style ~= "centre" and self._hp_number_was_hover then
+    self._hp_number_was_hover = false
+    self:SetHPNumberAlways(self.hp_number_always)
+  end
 end
 
 -- cur = current HP (absolute), max = FULL max HP, penaltypercent = max-HP penalty (0..1).
@@ -310,6 +467,24 @@ function PartyBadge:_apply_frame_colour()
   self.circleframe:GetAnimState():SetMultColour(badgemath.frame_colour(self.low_hp, self.foreign, self._blink_t))
 end
 
+-- v2026.11: single-writer for self.name's colour, reconciling {player colour, foreign-dim}. Both
+-- SetForeign and SetName route through here so the player colour and the foreign dim can never desync
+-- (same single-writer model as _apply_frame_colour). When name_colour_enabled is false, the name keeps
+-- the pre-v2026.11 white-at-alpha look (so the feature is a no-op until config turns it on). The pure
+-- reconciliation (nil/not-ready-white -> GREY, alpha = base*dim) lives in avatarmath.name_colour.
+function PartyBadge:_apply_name_colour()
+  if self.name == nil then
+    return
+  end
+  local a = self.foreign and FOREIGN_ALPHA or FULL_ALPHA
+  if not self.name_colour_enabled then
+    self.name:SetColour(1, 1, 1, a)
+    return
+  end
+  local c = avatarmath.name_colour(self.player_colour, self.foreign, FOREIGN_ALPHA)
+  self.name:SetColour(c[1], c[2], c[3], c[4])
+end
+
 -- v2026.9: enter/leave the low-HP pulsing state. Idempotent. Uses the widget per-frame update loop
 -- (StartUpdating/StopUpdating + OnUpdate) so the border can fade smoothly; Widget:Kill stops updates.
 function PartyBadge:_set_low_hp(islow)
@@ -372,8 +547,9 @@ function PartyBadge:SetForeign(isforeign, label, sameshard)
     set_anim_alpha(self.sanitybadge.backing, a)
     set_anim_alpha(self.sanitybadge.circleframe, a)
   end
-  -- text elements: name + the HP / sub-ring numbers.
-  self.name:SetColour(1, 1, 1, a)
+  -- text elements: name + the HP / sub-ring numbers. The NAME is owned by _apply_name_colour
+  -- (reconciles the player colour with the foreign dim); call it after self.foreign is set above.
+  self:_apply_name_colour()
   if self.num ~= nil then
     self.num:SetColour(1, 1, 1, a)
   end
@@ -409,6 +585,12 @@ end
 
 function PartyBadge:HideBadge()
   self:_set_low_hp(false) -- stop any blink task before hiding a departed / empty slot
+  if self.avatar_corner ~= nil then
+    self.avatar_corner:Hide()
+  end
+  if self.avatar_head ~= nil then
+    self.avatar_head:Hide()
+  end
   self:Hide()
 end
 
@@ -458,6 +640,13 @@ function PartyBadge:ShowDead()
   self:StopWarning()
   self.hparrow:Hide()
   self.hparrow_cur = nil
+  -- a dead teammate shows the skull, which is mutually exclusive with the centre/corner avatar.
+  if self.avatar_corner ~= nil then
+    self.avatar_corner:Hide()
+  end
+  if self.avatar_head ~= nil then
+    self.avatar_head:Hide()
+  end
   self.dead:Show()
 end
 
