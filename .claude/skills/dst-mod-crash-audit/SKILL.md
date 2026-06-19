@@ -102,6 +102,14 @@ Pair each with the matching section of `references/dst-runtime-gotchas.md`.
    closures that fire after their target is removed (guard at FIRE time, not just registration);
    and **listener source correctness** — register on the entity whose removal should clean it up,
    with the right event source (this is both the v2026.3 crash and the clean-teardown pattern).
+   **Naked dispatch:** the engine invokes scheduler bodies (`DoPeriodicTask`/`DoTaskInTime`) and
+   event-bus handlers (`ListenForEvent`) **without a pcall** — an uncaught throw there halts a
+   dedicated-server shard (no error screen, no runtime mod-disable), unlike modmain top-level +
+   post-init bodies, which the engine DOES xpcall. Being inside a (protected) post-init does not
+   protect the (naked) closures it installs. Rule: **wrap every mod-owned runtime callback at the
+   point it is registered** in a small `guarded(label, fn)` pcall shim that logs once + degrades
+   (skip that tick/event) with a dev re-raise toggle — a SAFETY NET, not a replacement for the
+   static/runtime gates. Reference pattern: PartyHud's `scripts/partyhud_guard.lua`. See gotchas §5.
 
 6. **Client / server context & netvar ranges.** Server-only work under `TheWorld.ismastersim`,
    client-only under `not TheNet:IsDedicated()` / guarded by `ThePlayer`; no server-only
@@ -151,3 +159,8 @@ references §12.4). With no players, `pause_when_empty=true` freezes the sim, so
 `tonumber`) passes the smoke, then detonates the moment a player connects. If the mod adds or
 changes any periodic/tick task, the smoke is not enough — temporarily `pause_when_empty=false`
 (or connect a client) and watch for several task periods, or in-game test with a real player.
+
+A `guarded()` wrapper on those tick/event callbacks (dimension 5) is a SAFETY NET, not a
+substitute for this gate: the connected-player smoke is still required — the guard only keeps a
+bug from halting the shard, it doesn't tell you the bug exists (run with the dev re-raise toggle
+on so it still surfaces loudly).

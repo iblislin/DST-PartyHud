@@ -132,6 +132,33 @@ Several gotchas below follow directly from 5.1 semantics:
   this can leak across rebuilds.
 - Deferred work (`DoTaskInTime`, event callbacks) can fire after its target is gone — guard
   `ThePlayer`/`self.owner`/`TheWorld`/`HUD` at FIRE time, not just at registration.
+- **The engine dispatches mod runtime callbacks NAKED (no pcall)** — an uncaught throw in one
+  HALTS a dedicated-server shard, and on a dedicated server it does so *repeatedly* (no recovery).
+  Verified against source:
+  - `DoPeriodicTask` / `DoTaskInTime` bodies are called bare by `Scheduler:OnTick`
+    (`scheduler.lua` ~:184-190) — NAKED.
+  - `ListenForEvent` handlers are called bare by `PushEvent_Internal` (`entityscript.lua`
+    ~:1298-1300) — NAKED.
+  - Shard-RPC handler invocation crosses into C++ (`networkclientrpc.lua`) — treat as NAKED.
+  - **Contrast:** modmain top-level + the post-init bodies (`AddSimPostInit` / `AddPlayerPostInit`
+    / `AddPrefabPostInit` / `AddComponentPostInit`) ARE run inside the engine's xpcall
+    (`mods.lua` ~:192-205, ~:606) → a throw there disables the mod cleanly and the server survives.
+  - A **dedicated server has NO error screen** and NO runtime mod-disable: `SetGlobalErrorWidget`
+    / the error UI are gated behind `not TheNet:IsDedicated()` (`gamelogic.lua`). So a naked
+    runtime throw on a dedicated shard isn't caught, isn't shown, and isn't disarmed — it just
+    halts the shard. Being inside a (protected) post-init does NOT protect the (naked) closures
+    that post-init *installs*.
+  - **Rule — wrap at the point of registration.** Every mod-owned runtime callback registered on
+    the sim-time scheduler or the event bus should be wrapped in a small pcall shim, e.g.
+    `inst:DoPeriodicTask(0.5, guarded("broadcast", do_broadcast))`. The wrapper logs the failure
+    ONCE per label + degrades (skip that tick/event, don't propagate), with a dev re-raise toggle
+    so the bug still surfaces loudly in CI/dogfood. In modmain the shim must use `GLOBAL.pcall` /
+    `GLOBAL.xpcall` / `GLOBAL.debug.traceback` — the sandbox lacks the bare ones (see
+    Language-baseline note). This is a SAFETY NET, not a substitute for the static gates
+    (luacheck + this audit) or the runtime gate (the player-connected smoke, §12.3). Reference
+    pattern: PartyHud's `scripts/partyhud_guard.lua` (pure `make(deps) -> guarded(label, fn)`)
+    + the v2026.11 crash-guard spec `docs/superpowers/specs/2026-06-19-crash-guard-design.md`.
+    → dimension 5 + the v2026.9 incident (§11, §12.3) that motivated it.
 
 ## 6. Netvar types & ranges
 - `net_bool`; `net_tinybyte` (0..7); `net_byte` (0..255); `net_shortint`/`net_ushortint`
