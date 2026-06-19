@@ -2,7 +2,7 @@ name = "PartyHud 2026"
 description =
   "A DST mod that displays the health, hunger, sanity, on-fire and temperature (overheating/freezing) status of other players. Set Position and layout in config."
 author = "iblislin (DST 2026 port); original PartyHUD by brianchenito"
-version = "2026.10"
+version = "2026.11"
 forumthread = ""
 
 api_version = 10 -- the current version of the modding api
@@ -108,6 +108,29 @@ configuration_options = {
       { description = "15%", data = 15 },
     },
     default = 25,
+    client = true,
+  },
+  {
+    name = "avatar_style",
+    label = "Teammate avatar",
+    hover = "Show each teammate's character avatar on their badge. Corner is a small flat head in the badge corner; Centred head is the animated character face in the ring centre (HP number becomes hover-only).",
+    options = {
+      { description = "Off", data = 0 },
+      { description = "Corner", data = 1 },
+      { description = "Centred head", data = 2 },
+    },
+    default = 1,
+    client = true,
+  },
+  {
+    name = "name_colour",
+    label = "Colour Teammate Names",
+    hover = "Tint each teammate's name in their own player colour. Off keeps names plain white.",
+    options = {
+      { description = "On", data = 1 },
+      { description = "Off", data = 0 },
+    },
+    default = 1,
     client = true,
   },
 }
