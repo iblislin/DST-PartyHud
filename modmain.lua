@@ -111,6 +111,70 @@ local statuslogic = _G.require("partyhud_status")
 local record = _G.require("partyhud_record")
 local get_client_foreign_records -- forward decl; assigned where the client store lives (see below)
 
+-- v2026.11 Q5 FOREIGN-DATA STALENESS HEARTBEAT (client-only; cannot crash the shard).
+-- guarded() catches a THROW; it does NOT catch a broadcast task that wedges/stops SILENTLY. The TTL
+-- expire + the carrier :set both live inside the 0.5s task (modmain ~996/~1034), so a wedged task
+-- freezes client_foreign_records at stale HP for minutes. Stamp the receive time on every carrier-
+-- dirty update; the foreign-append render block checks freshness and, when stale, SKIPS appending --
+-- the existing trailing-slot clear (~622-629) then runs SetForeign(false)/HideBadge() so the stale
+-- cross-shard badges vanish with NO new clear code. FOREIGN_STALE_SECS = 5 is 10x the 0.5s cadence
+-- and > the 3s server TTL, biased against false-positive hiding.
+local FOREIGN_STALE_SECS = 5
+local last_foreign_blob_time = 0 -- GetTime() of the last carrier-dirty update; 0 = none yet
+local _foreign_stale_logged = false -- log-once when we start hiding stale foreign badges
+
+-- ============================================================================================
+-- v2026.11 SERVER-SIDE CRASH GUARD (design: docs/superpowers/specs/2026-06-19-crash-guard-design.md)
+--
+-- The engine dispatches our server-side runtime callbacks with NO pcall on three paths:
+--   * DoPeriodicTask/DoTaskInTime body  -- Scheduler:OnTick, bare k.fn(unpack(k.arg))  (scheduler.lua:184-190)
+--   * ListenForEvent handler            -- PushEvent_Internal, bare fn(self, data)     (entityscript.lua:1298-1300)
+--   * Shard-RPC handler                 -- crosses into C++ CallShardRPC                (networkclientrpc.lua:1783)
+-- A dedicated server has NO error screen and NO runtime mod-disable, so a throw on any of these
+-- HALTS the master shard and repeats forever (the bare-tonumber incident). guarded() converts a
+-- shard-fatal throw into a logged, skipped tick/event.
+--
+-- SANDBOX-CORRECT: bare pcall/xpcall/unpack/error/debug are nil in modmain's env (mods.lua:302-331,
+-- whitelists tostring but NOT these) -- a bare pcall here would crash exactly where it must protect.
+-- These aliases stay plain locals; Lua 5.1 has no `const`, and luacheck std="lua51" (in the 0/0
+-- gate) catches accidental reassignment.
+local pcall = GLOBAL.pcall
+local xpcall = GLOBAL.xpcall
+local unpack = GLOBAL.unpack
+local tostring_g = GLOBAL.tostring
+local error_g = GLOBAL.error
+local traceback = GLOBAL.debug and GLOBAL.debug.traceback
+
+-- Flip true while developing / in CI / dogfood so crashes still surface LOUDLY (the de-dup +
+-- re-raise are load-bearing: a guard that hides bugs silently is worse than the crash). Ship false.
+local PARTYHUD_DEV_RERAISE = false
+
+-- The pure decision logic (call-through / swallow+log-once / re-raise) lives in partyhud_guard so it
+-- is busted-tested engine-free (spec/guard_spec.lua). modmain only supplies the GLOBAL.-bound wiring.
+local guardlogic = _G.require("partyhud_guard")
+local _guard_state = { logged = {} } -- de-dup: one stack per label, not one per 0.5s tick
+local guard_runner = guardlogic.make({
+  pcall = pcall,
+  xpcall = xpcall,
+  unpack = unpack,
+  tostring = tostring_g,
+  traceback = traceback,
+  error = error_g,
+  print = GLOBAL.print,
+  state = _guard_state,
+  dev_reraise = function()
+    return PARTYHUD_DEV_RERAISE
+  end,
+})
+
+-- guarded(label, fn) -> a function that runs fn(...) under xpcall; on a throw it logs the traceback
+-- ONCE per label and swallows (engine discards callback returns on all three dispatch paths). The
+-- periodic task is re-listed by the scheduler (period-driven, not return-driven) so a skipped tick
+-- resumes next tick; an event handler resumes on the next event. Do NOT serve stale netvars as fresh.
+local function guarded(label, fn)
+  return guard_runner(label, fn)
+end
+
 if positional == 0 then -- standard with minimap
   phud_xpos = -100
   phud_ypos = -70
@@ -535,7 +599,17 @@ local function onstatusdisplaysconstruct(self)
     -- show_crossshard (client option) additionally gates this: when off, only local players render.
     -- The trailing-slot clear below still runs, so a slot that WAS foreign last refresh gets
     -- SetForeign(false) + HideBadge() (next_slot stays = the first non-local slot here).
-    if show_crossshard and not DEBUG_SHOWALL and next_slot <= maxbadges then
+    -- Q5 freshness: if the carrier blob has not refreshed within FOREIGN_STALE_SECS, the server's
+    -- broadcast task has likely wedged -- the foreign HP is stale and misleading, so SKIP the append.
+    -- The trailing-slot clear below then hides those slots. last_foreign_blob_time == 0 (no blob yet)
+    -- is treated as stale, which is correct: nothing to show until the first real publish arrives.
+    local foreign_fresh = last_foreign_blob_time > 0
+      and (GLOBAL.GetTime() - last_foreign_blob_time) <= FOREIGN_STALE_SECS
+    if not foreign_fresh and last_foreign_blob_time > 0 and not _foreign_stale_logged then
+      _foreign_stale_logged = true
+      GLOBAL.print("[PartyHud] foreign data stale, hiding cross-shard badges (further repeats suppressed)")
+    end
+    if show_crossshard and not DEBUG_SHOWALL and foreign_fresh and next_slot <= maxbadges then
       -- userid -> display name, built once per refresh from the cluster roster.
       local namebyuserid = {}
       local clienttable = _G.TheNet ~= nil and _G.TheNet:GetClientTable() or nil
@@ -776,17 +850,17 @@ local function customhppostinit(inst)
 
   -- Server (master sim) reacts to health/death and updates the netvars
   if GLOBAL.TheWorld.ismastersim then
-    inst:ListenForEvent("healthdelta", onhealthdelta)
-    inst:ListenForEvent("ms_respawnedfromghost", onrespawnedfromghost)
-    inst:ListenForEvent("ms_becameghost", onbecameghost)
-    inst:ListenForEvent("hungerdelta", onhungerdelta)
-    inst:ListenForEvent("sanitydelta", onsanitydelta)
-    inst:ListenForEvent("startfiredamage", onstartfire)
-    inst:ListenForEvent("stopfiredamage", onstopfire)
-    inst:ListenForEvent("startoverheating", onstartoverheating)
-    inst:ListenForEvent("stopoverheating", onstopoverheating)
-    inst:ListenForEvent("startfreezing", onstartfreezing)
-    inst:ListenForEvent("stopfreezing", onstopfreezing)
+    inst:ListenForEvent("healthdelta", guarded("ev:healthdelta", onhealthdelta))
+    inst:ListenForEvent("ms_respawnedfromghost", guarded("ev:ms_respawnedfromghost", onrespawnedfromghost))
+    inst:ListenForEvent("ms_becameghost", guarded("ev:ms_becameghost", onbecameghost))
+    inst:ListenForEvent("hungerdelta", guarded("ev:hungerdelta", onhungerdelta))
+    inst:ListenForEvent("sanitydelta", guarded("ev:sanitydelta", onsanitydelta))
+    inst:ListenForEvent("startfiredamage", guarded("ev:startfiredamage", onstartfire))
+    inst:ListenForEvent("stopfiredamage", guarded("ev:stopfiredamage", onstopfire))
+    inst:ListenForEvent("startoverheating", guarded("ev:startoverheating", onstartoverheating))
+    inst:ListenForEvent("stopoverheating", guarded("ev:stopoverheating", onstopoverheating))
+    inst:ListenForEvent("startfreezing", guarded("ev:startfreezing", onstartfreezing))
+    inst:ListenForEvent("stopfreezing", guarded("ev:stopfreezing", onstopfreezing))
 
     -- seed dead/ghost state for players (re)spawning here, incl. ghosts arriving via shard migration
     if inst:HasTag("playerghost") or (inst.components.health ~= nil and inst.components.health:IsDead()) then
@@ -950,7 +1024,11 @@ GLOBAL.AddShardModRPCHandler(XSHARD_RPC_NAMESPACE, XSHARD_RPC_NAME, function(sen
       rec.origin = sender_shard_id
     end
   end
-  crossshard.upsert(foreign_store, records, GLOBAL.GetTime())
+  -- defense-in-depth behind the C++ CallShardRPC boundary (networkclientrpc.lua:1783, unverifiable
+  -- => treat as naked): a throw inside upsert must not propagate back across the boundary.
+  guarded("xshard:upsert", function()
+    crossshard.upsert(foreign_store, records, GLOBAL.GetTime())
+  end)()
   if DEBUG_XSHARD then
     print("[PartyHud] [XSHARD] recv " .. #records .. " records from shard " .. tostring(sender_shard_id))
   end
@@ -968,75 +1046,78 @@ AddSimPostInit(function()
   -- ~2 Hz; for T3 sends UNCONDITIONALLY every tick (even an empty roster) so the transport can be
   -- proven headless with no players online. The dirty-coalescing / burst / keepalive cadence
   -- optimization is a LATER task (T6) -- intentionally not built here.
-  GLOBAL.TheWorld:DoPeriodicTask(0.5, function()
-    -- Recompute each tick so it resolves once TheShard is ready. tostring() is REQUIRED:
-    -- Shard_GetConnectedShards() keys are STRINGS but GetShardId() returns a NUMBER, so without
-    -- coercion `"1" ~= 1` is always true and the shard would fail to exclude itself (sending its
-    -- own roster back to itself -> duplicate players in foreign_store under real multiplayer).
-    local my_shard_id = GLOBAL.TheShard ~= nil and tostring(GLOBAL.TheShard:GetShardId()) or nil
-    if my_shard_id == nil then
-      return
-    end -- shard id not resolvable yet; skip send AND publish this tick (foreign_store is still empty then, so the skipped publish is a no-op)
-    local records = build_local_records()
-    local payload = codec.encode(records)
-    -- Shard_GetConnectedShards() is keyed by world/shard id. Send to each id that is NOT this
-    -- shard and is currently available (gating avoids RPCs into a down shard). EXPLICIT target
-    -- shard id -- a nil target leaks the RPC to clients (known bug).
-    for world_id in pairs(GLOBAL.Shard_GetConnectedShards()) do
-      if world_id ~= my_shard_id and GLOBAL.Shard_IsWorldAvailable(world_id) then
-        GLOBAL.SendModRPCToShard(xshard_rpc_handle, world_id, payload)
-        if DEBUG_XSHARD then
-          print("[PartyHud] [XSHARD] sent " .. #records .. " records to shard " .. tostring(world_id))
-        end
-      end
-    end
-    -- STALE-ENTRY CLEANUP (before publishing). Two independent passes:
-    --   (1) EXPIRE: age out entries no longer being refreshed -- catches a peer shard that
-    --       CRASHED / stopped sending (its players stop refreshing and age past XSHARD_TTL).
-    crossshard.expire(foreign_store, GLOBAL.GetTime(), XSHARD_TTL)
-    --   (2) RECONCILE against the CLUSTER roster: drop any foreign player who has left the cluster
-    --       entirely. TheNet:GetClientTable() is cluster-wide (covers BOTH shards), so it's the
-    --       authoritative live set. Nil-guard it: if unavailable this tick, SKIP reconcile -- never
-    --       reconcile against an empty set (that would wipe everything).
-    if GLOBAL.TheNet ~= nil and GLOBAL.TheNet.GetClientTable ~= nil then
-      local clienttable = GLOBAL.TheNet:GetClientTable()
-      -- Guard BOTH nil AND empty: GetClientTable() can transiently return {} (e.g. mid-handshake),
-      -- and reconcile against an empty live_set would wipe every foreign player for that tick
-      -- (the badges flicker out and back ~0.5s later). The engine's own consumers guard `#t > 0`
-      -- too (playerhistory.lua). expire() still runs independently, so a truly-gone peer is caught.
-      if clienttable ~= nil and #clienttable > 0 then
-        local live_set = {}
-        for _, c in ipairs(clienttable) do
-          if c.userid ~= nil and c.userid ~= "" then
-            live_set[c.userid] = true
+  GLOBAL.TheWorld:DoPeriodicTask(
+    0.5,
+    guarded("broadcast", function()
+      -- Recompute each tick so it resolves once TheShard is ready. tostring() is REQUIRED:
+      -- Shard_GetConnectedShards() keys are STRINGS but GetShardId() returns a NUMBER, so without
+      -- coercion `"1" ~= 1` is always true and the shard would fail to exclude itself (sending its
+      -- own roster back to itself -> duplicate players in foreign_store under real multiplayer).
+      local my_shard_id = GLOBAL.TheShard ~= nil and tostring(GLOBAL.TheShard:GetShardId()) or nil
+      if my_shard_id == nil then
+        return
+      end -- shard id not resolvable yet; skip send AND publish this tick (foreign_store is still empty then, so the skipped publish is a no-op)
+      local records = build_local_records()
+      local payload = codec.encode(records)
+      -- Shard_GetConnectedShards() is keyed by world/shard id. Send to each id that is NOT this
+      -- shard and is currently available (gating avoids RPCs into a down shard). EXPLICIT target
+      -- shard id -- a nil target leaks the RPC to clients (known bug).
+      for world_id in pairs(GLOBAL.Shard_GetConnectedShards()) do
+        if world_id ~= my_shard_id and GLOBAL.Shard_IsWorldAvailable(world_id) then
+          GLOBAL.SendModRPCToShard(xshard_rpc_handle, world_id, payload)
+          if DEBUG_XSHARD then
+            print("[PartyHud] [XSHARD] sent " .. #records .. " records to shard " .. tostring(world_id))
           end
         end
-        crossshard.reconcile(foreign_store, live_set)
       end
-    end
-    -- HOP-2 PUBLISH: push the CURRENT foreign players (this shard's view of the OTHER shard's
-    -- roster, accumulated by the receive handler) onto the carrier net_string so this shard's
-    -- CLIENTS get them. crossshard.active() returns the cleaned, userid-sorted record array.
-    -- net_string:set only transmits on an actual value change, so re-setting an unchanged blob
-    -- each tick is cheap (no wire traffic). Nil-guard TheWorld.net + the netvar: the carrier is
-    -- attached in AddPrefabPostInit which runs before the worlds finish coming up, but guard
-    -- anyway so an unexpected ordering can never nil-index here.
-    if GLOBAL.TheWorld.net ~= nil and GLOBAL.TheWorld.net.partyhud_foreignblob ~= nil then
-      local foreign = crossshard.active(foreign_store)
-      -- v2026.8 SAME-SHARD-FAR FIX: also merge THIS shard's own players (server's AllPlayers is
-      -- shard-complete, unlike a client's view-range-limited AllPlayers) so a same-shard teammate
-      -- out of network view-range still reaches every client via the carrier. `records` is the
-      -- build_local_records() result already computed earlier this tick for the outbound RPC --
-      -- REUSE it (do NOT rebuild). userid-deduped, LOCAL wins over a foreign copy of the same user
-      -- (e.g. a player mid-migration briefly present in both sets).
-      -- userid-deduped merge, LOCAL wins (extracted to crossshard.merge_local_foreign for testing).
-      local merged = crossshard.merge_local_foreign(records, foreign)
-      GLOBAL.TheWorld.net.partyhud_foreignblob:set(codec.encode(merged))
-      if DEBUG_XSHARD then
-        print("[PartyHud] [XSHARD] published " .. #merged .. " records to carrier (" .. #foreign .. " foreign)")
+      -- STALE-ENTRY CLEANUP (before publishing). Two independent passes:
+      --   (1) EXPIRE: age out entries no longer being refreshed -- catches a peer shard that
+      --       CRASHED / stopped sending (its players stop refreshing and age past XSHARD_TTL).
+      crossshard.expire(foreign_store, GLOBAL.GetTime(), XSHARD_TTL)
+      --   (2) RECONCILE against the CLUSTER roster: drop any foreign player who has left the cluster
+      --       entirely. TheNet:GetClientTable() is cluster-wide (covers BOTH shards), so it's the
+      --       authoritative live set. Nil-guard it: if unavailable this tick, SKIP reconcile -- never
+      --       reconcile against an empty set (that would wipe everything).
+      if GLOBAL.TheNet ~= nil and GLOBAL.TheNet.GetClientTable ~= nil then
+        local clienttable = GLOBAL.TheNet:GetClientTable()
+        -- Guard BOTH nil AND empty: GetClientTable() can transiently return {} (e.g. mid-handshake),
+        -- and reconcile against an empty live_set would wipe every foreign player for that tick
+        -- (the badges flicker out and back ~0.5s later). The engine's own consumers guard `#t > 0`
+        -- too (playerhistory.lua). expire() still runs independently, so a truly-gone peer is caught.
+        if clienttable ~= nil and #clienttable > 0 then
+          local live_set = {}
+          for _, c in ipairs(clienttable) do
+            if c.userid ~= nil and c.userid ~= "" then
+              live_set[c.userid] = true
+            end
+          end
+          crossshard.reconcile(foreign_store, live_set)
+        end
       end
-    end
-  end)
+      -- HOP-2 PUBLISH: push the CURRENT foreign players (this shard's view of the OTHER shard's
+      -- roster, accumulated by the receive handler) onto the carrier net_string so this shard's
+      -- CLIENTS get them. crossshard.active() returns the cleaned, userid-sorted record array.
+      -- net_string:set only transmits on an actual value change, so re-setting an unchanged blob
+      -- each tick is cheap (no wire traffic). Nil-guard TheWorld.net + the netvar: the carrier is
+      -- attached in AddPrefabPostInit which runs before the worlds finish coming up, but guard
+      -- anyway so an unexpected ordering can never nil-index here.
+      if GLOBAL.TheWorld.net ~= nil and GLOBAL.TheWorld.net.partyhud_foreignblob ~= nil then
+        local foreign = crossshard.active(foreign_store)
+        -- v2026.8 SAME-SHARD-FAR FIX: also merge THIS shard's own players (server's AllPlayers is
+        -- shard-complete, unlike a client's view-range-limited AllPlayers) so a same-shard teammate
+        -- out of network view-range still reaches every client via the carrier. `records` is the
+        -- build_local_records() result already computed earlier this tick for the outbound RPC --
+        -- REUSE it (do NOT rebuild). userid-deduped, LOCAL wins over a foreign copy of the same user
+        -- (e.g. a player mid-migration briefly present in both sets).
+        -- userid-deduped merge, LOCAL wins (extracted to crossshard.merge_local_foreign for testing).
+        local merged = crossshard.merge_local_foreign(records, foreign)
+        GLOBAL.TheWorld.net.partyhud_foreignblob:set(codec.encode(merged))
+        if DEBUG_XSHARD then
+          print("[PartyHud] [XSHARD] published " .. #merged .. " records to carrier (" .. #foreign .. " foreign)")
+        end
+      end
+    end)
+  )
 end)
 
 -- HOP-2 CARRIER: a net_string on the shard's network entity (TheWorld.net), which is ALWAYS
@@ -1068,6 +1149,8 @@ local function attach_carrier(inst)
         return
       end
       client_foreign_records = records
+      last_foreign_blob_time = GLOBAL.GetTime()
+      _foreign_stale_logged = false -- a fresh blob arrived; re-arm the stale-log for the next outage
       if DEBUG_XSHARD then
         print("[PartyHud] [XSHARD] client got " .. #records .. " foreign records")
       end
