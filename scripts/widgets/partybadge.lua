@@ -340,8 +340,14 @@ function PartyBadge:SetAvatar(prefab, idflags, is_foreign)
         hs:SetTime(0)
         hs:Pause()
       end
-      self.avatar_head:SetScale(scale)
-      self.avatar_head:SetPosition(0, y_offset, 0)
+      -- The raw engine scale/y_offset are tuned for the vanilla scoreboard (head under a .8 icon in a
+      -- bigger frame); PartyHud draws on a smaller ring with no .8 parent, so shrink them to fit via the
+      -- pure helper. _head_fit / _head_ynudge are nil by default (helper uses its constants); the
+      -- PartyHud_AvatarHeadFit console fn tunes them at runtime. Re-read here so the rebuild picks up
+      -- a fresh override (this block runs when _avatar_identity was cleared -> `changed`).
+      local s, yo = avatarmath.avatar_head_geom(scale, y_offset, PartyBadge._head_fit, PartyBadge._head_ynudge)
+      self.avatar_head:SetScale(s)
+      self.avatar_head:SetPosition(0, yo, 0)
       -- base build / skin: GetSkinData(base_skin or prefab.."_none") -> skins[skin_mode]; SetSkinsOnAnim
       -- (components/skinner.lua:11, a GLOBAL) puts the base build on the anim. base_skin defaults handled
       -- by SetSkinsOnAnim; pass the plain character head (full skin fidelity is out of scope).
@@ -355,6 +361,13 @@ function PartyBadge:SetAvatar(prefab, idflags, is_foreign)
     end
     self.avatar_head:GetAnimState():SetMultColour(1, 1, 1, a)
     self.avatar_head:Show()
+    -- z-order (back -> front): ring art < avatar head < HP number. The head is AddChild'd in this branch
+    -- AFTER the Badge base created self.num, so it draws over the number; on hover the number would be
+    -- hidden behind the face. MoveToFront re-appends self.num to the END of the shared parent (self) child
+    -- list so it draws above the head while the head still draws above the ring. self.num exists (Badge
+    -- base _ctor created it); idempotent + cheap, so re-running per centre SetAvatar is fine. Documented
+    -- source of truth for this stack: partyhud_badge.layer_order("centre").
+    self.num:MoveToFront()
     -- HP number is hover-only while the centre head is up, so the face is unobstructed. Restored by
     -- SetAvatarStyle("off"/"corner") via the _hp_number_was_hover reset below. Set the flag, then let
     -- the single-writer hide (decision becomes false once the flag is true; allow_hide=true performs it).
@@ -385,6 +398,22 @@ function PartyBadge:SetAvatarStyle(style)
     self._hp_number_was_hover = false
     self:_apply_hp_number_visibility(true)
   end
+end
+
+-- v2026.11 centre-avatar head-fit overrides (CLASS-level statics, shared by every badge). nil means
+-- "use avatar_head_geom's constant defaults" (M.AVATAR_HEAD_FIT / M.AVATAR_HEAD_Y_NUDGE). The
+-- PartyHud_AvatarHeadFit console fn sets these via SetHeadFitOverride to tune the centre head's size /
+-- vertical placement in-engine without a reconnect; the centre rebuild path (SetAvatar's `changed`
+-- block) re-reads them, so clearing each badge's _avatar_identity is enough to apply a new value.
+PartyBadge._head_fit = nil
+PartyBadge._head_ynudge = nil
+
+-- Static setter for the centre-head fit overrides (called by modmain's debug console fn). Passing nil
+-- for either argument restores that override to the helper's constant default. Class-level on purpose:
+-- the fit is a global render-tuning knob, not per-teammate state.
+function PartyBadge.SetHeadFitOverride(fit, ynudge)
+  PartyBadge._head_fit = fit
+  PartyBadge._head_ynudge = ynudge
 end
 
 -- cur = current HP (absolute), max = FULL max HP, penaltypercent = max-HP penalty (0..1).

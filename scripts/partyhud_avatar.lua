@@ -136,6 +136,31 @@ function M.resolve_avatar_style(config_value)
   return "off"
 end
 
+-- Centre-avatar head fit. GetPlayerBadgeData (skinsutils.lua:1903) returns scale (~0.23) / y_offset
+-- (~-50) TUNED FOR THE VANILLA SCOREBOARD avatar, where the head is nested under an icon scaled .8
+-- (playerbadge.lua:16 `self.icon:SetScale(.8)`) inside the scoreboard frame. PartyHud draws the head
+-- DIRECTLY on the smaller HP ring with NO .8 parent and a different frame, so the raw engine values
+-- overflow the ring. AVATAR_HEAD_FIT shrinks both scale and y_offset proportionally to fit; the final
+-- value is tuned IN-ENGINE (these are provisional defaults). AVATAR_HEAD_Y_NUDGE is an absolute,
+-- unscaled y tweak applied after the proportional shrink, also tuned in-engine.
+M.AVATAR_HEAD_FIT = 0.6
+M.AVATAR_HEAD_Y_NUDGE = 0
+
+-- Pure geometry for the centre animated head. Takes the engine's raw base_scale / base_y_offset from
+-- GetPlayerBadgeData and returns the (scale, y_offset) PartyHud should actually apply to its smaller,
+-- .8-parent-less ring. Formula:
+--   scale    = base_scale    * fit
+--   y_offset = base_y_offset * fit + y_nudge
+-- `fit` falls back to M.AVATAR_HEAD_FIT, `y_nudge` to M.AVATAR_HEAD_Y_NUDGE when nil. nil base inputs
+-- are treated as 0 so the widget can pass through whatever GetPlayerBadgeData yields without guarding.
+function M.avatar_head_geom(base_scale, base_y_offset, fit, y_nudge)
+  base_scale = base_scale or 0
+  base_y_offset = base_y_offset or 0
+  fit = fit or M.AVATAR_HEAD_FIT
+  y_nudge = y_nudge or M.AVATAR_HEAD_Y_NUDGE
+  return base_scale * fit, base_y_offset * fit + y_nudge
+end
+
 -- DEFAULT_PLAYER_COLOUR (constants.lua:1765) = RGB(153,153,153) = {0.6,0.6,0.6} GREY. Used when the
 -- player colour is not yet known. Kept as a module constant so the widget + specs agree on it without
 -- depending on the engine global.

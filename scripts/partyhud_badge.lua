@@ -55,4 +55,20 @@ function M.is_low_hp(cur, max, threshold)
   return (cur / m) < threshold
 end
 
+-- v2026.11: the intended badge child-draw order, BACK to FRONT, for a given avatar style. This captures
+-- the INTENT that the live widget enforces (the widget tree itself is verified in-engine, not here):
+--   "centre" -> { "ring_art", "avatar_head", "hp_number" }: the centre style adds an animated head over
+--     the ring, which (being AddChild'd after the Badge base created self.num) would otherwise draw over
+--     the HP number. The widget restores number-on-top via self.num:MoveToFront() right after showing the
+--     head, so the number is ALWAYS the front-most element.
+--   any other style ("corner", "off", nil) -> { "ring_art", "hp_number" }: no centre head in the stack
+--     (corner uses a separate top-left inset, off has none), so the number simply sits over the ring.
+-- The hp_number is the LAST (front) element in every case -- the property the centre z-order bug violated.
+function M.layer_order(style)
+  if style == "centre" then
+    return { "ring_art", "avatar_head", "hp_number" }
+  end
+  return { "ring_art", "hp_number" }
+end
+
 return M

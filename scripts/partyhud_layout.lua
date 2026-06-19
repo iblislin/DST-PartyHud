@@ -74,4 +74,100 @@ function M.column_reserve(col, dodge, bpmode, vstarty, second_row_reserve, full_
   return top, bottom
 end
 
+-- M.compute_badge_positions(opts) -> array of { index, x, y, col, row } for slots 1..badge_count.
+--
+-- PURE extraction of modmain's layout_badges position math (behaviour-neutral): reproduces the exact
+-- horizontal-row formula AND the vertical column-wrap/dodge/reserve loop, but instead of calling
+-- :SetPosition on widgets it RETURNS the (x, y, col, row) each slot would have been placed at. modmain
+-- does the engine reads (screen size, HUD scale, backpack mode, second-row band, position/layout config)
+-- and passes them all in via opts; this module stays engine-free (bare globals only -> busted-testable).
+--
+-- opts fields (the caller supplies the current live/config values -- NOTHING is hardcoded here):
+--   layout_mode        number  the `layout` config: 2 = vertical (column wrap); anything else = horizontal row.
+--   position_mode      number  the `position` config (`positional` in modmain): 0 = standard+minimap,
+--                              1 = XL minimap (both reuse phud_xpos/phud_ypos as the vertical anchor),
+--                              2 = no-minimap (uses VERT_X/VERT_Y as the anchor).
+--   phud_xpos          number  horizontal anchor used by the horizontal row AND by the vertical anchor
+--                              when position_mode is 0 or 1.
+--   phud_ypos          number  vertical anchor (same dual use as phud_xpos).
+--   badge_count        number  how many badge slots to place (== #badgearray).
+--   show_substatus     bool    sub-rings visible? selects the vertical row gap (VERT_GAP vs VERT_GAP_COMPACT).
+--   screen_w,screen_h  number  live screen size (passed straight to percol_count; nil/<=0 -> fallback).
+--   hudscale           number  live HUD scale (ditto).
+--   bpmode             number  backpack UI mode 0/1/2 (1 shifts all columns left + frees col 0's bottom;
+--                              2 adds backpack_bottom_extra to the columns-2+ bottom reserve).
+--   second_row_cols    number  how many leading columns the top-right status band spans (0/1/2).
+--   second_row_reserve number  how far down to push those dodged columns' top.
+--   -- layout constants (caller passes modmain's current values; NOT hardcoded so they stay the SoT):
+--   vert_x, vert_y             number  standard (no-minimap) vertical anchor (VERT_X / VERT_Y).
+--   vert_gap, vert_gap_compact number  vertical row gaps (negative; VERT_GAP / VERT_GAP_COMPACT).
+--   vert_col_w                 number  horizontal spacing per wrapped column (VERT_COL_W).
+--   vert_bottom_reserve        number  col-0 full Map(M)-button bottom keep-out (VERT_BOTTOM_RESERVE).
+--   vert_bottom_reserve_free   number  columns-2+ bottom keep-out (VERT_BOTTOM_RESERVE_FREE).
+--   backpack_shift_x           number  left shift applied to all columns in Mode A (BACKPACK_SHIFT_X).
+--   backpack_bottom_extra      number  extra columns-2+ bottom in Mode B (BACKPACK_BOTTOM_EXTRA).
+--   horizontal_step            number  per-badge x step in the horizontal row (modmain's literal -70).
+function M.compute_badge_positions(opts)
+  local out = {}
+  local n = opts.badge_count
+  if n == nil or n <= 0 then
+    return out
+  end
+
+  if opts.layout_mode ~= 2 then
+    -- horizontal row: x = phud_xpos + (horizontal_step * i), y = phud_ypos, for i = 1..n. No real
+    -- column/row structure here -> report col 0, row i-1 so every slot still carries a col/row field.
+    for i = 1, n do
+      out[i] = {
+        index = i,
+        x = opts.phud_xpos + (opts.horizontal_step * i),
+        y = opts.phud_ypos,
+        col = 0,
+        row = i - 1,
+      }
+    end
+    return out
+  end
+
+  -- vertical: Minimap/XL reuse the phud anchor; Standard uses vert_x/vert_y. Stack down by vgap,
+  -- wrapping to a new column to the LEFT every per-col badges (right-anchored list -> grow leftward).
+  local vstartx, vstarty = opts.vert_x, opts.vert_y
+  if opts.position_mode == 0 or opts.position_mode == 1 then
+    vstartx, vstarty = opts.phud_xpos, opts.phud_ypos
+  end
+  local vgap = opts.show_substatus and opts.vert_gap or opts.vert_gap_compact
+  local bpmode = opts.bpmode
+  if bpmode == 1 then
+    vstartx = vstartx - opts.backpack_shift_x
+  end
+  local free = opts.vert_bottom_reserve_free + ((bpmode == 2) and opts.backpack_bottom_extra or 0)
+  local dodge = M.dodge_cols(bpmode, opts.second_row_cols)
+
+  -- Fill top-to-bottom, wrapping LEFTWARD. percol_count always returns >= 1 so col advances and i grows
+  -- each pass; `col <= n` is the same belt-and-suspenders bound modmain's loop carries.
+  local i, col = 1, 0
+  while i <= n and col <= n do
+    local top, bottom =
+      M.column_reserve(col, dodge, bpmode, vstarty, opts.second_row_reserve, opts.vert_bottom_reserve, free)
+    -- compute_percol in modmain reads the live screen geometry then delegates to percol_count with the
+    -- SAME vgap as the layout loop; here we call percol_count directly with the passed-in geometry.
+    local cap = M.percol_count(opts.screen_w, opts.screen_h, opts.hudscale, top, bottom, vgap)
+    for row = 0, cap - 1 do
+      if i > n then
+        break
+      end
+      out[i] = {
+        index = i,
+        x = vstartx - opts.vert_col_w * col,
+        y = top + vgap * row,
+        col = col,
+        row = row,
+      }
+      i = i + 1
+    end
+    col = col + 1
+  end
+  return out
+end
+
 return M

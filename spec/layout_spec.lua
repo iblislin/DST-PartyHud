@@ -161,4 +161,150 @@ describe("partyhud layout math", function()
       assert.are.equal(free, b2)
     end)
   end)
+
+  describe("compute_badge_positions", function()
+    -- The fixed layout constants modmain passes in (VERT_*, BACKPACK_*, horizontal step). A baseline
+    -- vertical scenario: 1280x720 @ hudscale 1.0, no-minimap position (2 -> uses vert_x/vert_y as anchor),
+    -- sub-rings shown (vgap = -120 -> rowpitch 120), no backpack, no second-row band. With percol_count
+    -- baseline = 3 (see the percol_count specs above), col 0/1/2 each hold 3 badges then wrap LEFT by
+    -- vert_col_w=80; col 0/1 bottom differs (65 full vs 40 free) but both still size to 3 here.
+    local function base(badge_count, over)
+      local o = {
+        layout_mode = 2,
+        position_mode = 2,
+        phud_xpos = -100,
+        phud_ypos = 120,
+        badge_count = badge_count,
+        show_substatus = true,
+        screen_w = 1280,
+        screen_h = 720,
+        hudscale = 1.0,
+        bpmode = 0,
+        second_row_cols = 0,
+        second_row_reserve = 0,
+        vert_x = 0,
+        vert_y = -130,
+        vert_gap = -120,
+        vert_gap_compact = -90,
+        vert_col_w = 80,
+        vert_bottom_reserve = 65,
+        vert_bottom_reserve_free = 40,
+        backpack_shift_x = 100,
+        backpack_bottom_extra = 20,
+        horizontal_step = -70,
+      }
+      if over then
+        for k, v in pairs(over) do
+          o[k] = v
+        end
+      end
+      return o
+    end
+
+    it("zero / nil badge_count -> empty array", function()
+      assert.are.same({}, M.compute_badge_positions(base(0)))
+      assert.are.same({}, M.compute_badge_positions(base(nil)))
+    end)
+
+    it("horizontal row (layout_mode ~= 2): x = phud_xpos + step*i, y = phud_ypos", function()
+      -- horizontal_step = -70, phud_xpos = -100, phud_ypos = 120. i = 1..3.
+      -- i1: -100 + (-70*1) = -170; i2: -240; i3: -310. y is always phud_ypos; col 0, row i-1.
+      local r = M.compute_badge_positions(base(3, { layout_mode = 0 }))
+      assert.are.equal(3, #r)
+      assert.are.same({ index = 1, x = -170, y = 120, col = 0, row = 0 }, r[1])
+      assert.are.same({ index = 2, x = -240, y = 120, col = 0, row = 1 }, r[2])
+      assert.are.same({ index = 3, x = -310, y = 120, col = 0, row = 2 }, r[3])
+    end)
+
+    it("vertical 1 badge -> single slot at the anchor", function()
+      local r = M.compute_badge_positions(base(1))
+      assert.are.equal(1, #r)
+      assert.are.same({ index = 1, x = 0, y = -130, col = 0, row = 0 }, r[1])
+    end)
+
+    it("vertical 2 badges -> stack down col 0 by vert_gap", function()
+      local r = M.compute_badge_positions(base(2))
+      assert.are.equal(2, #r)
+      assert.are.same({ index = 1, x = 0, y = -130, col = 0, row = 0 }, r[1])
+      -- y = vstarty + vert_gap*1 = -130 + (-120) = -250
+      assert.are.same({ index = 2, x = 0, y = -250, col = 0, row = 1 }, r[2])
+    end)
+
+    it("vertical 8 badges -> wraps col 0 (3) | col 1 (3) | col 2 (2)", function()
+      -- percol_count = 3 per column at the baseline. 8 badges => 3 + 3 + 2.
+      local r = M.compute_badge_positions(base(8))
+      assert.are.equal(8, #r)
+      -- col 0: x 0
+      assert.are.same({ index = 1, x = 0, y = -130, col = 0, row = 0 }, r[1])
+      assert.are.same({ index = 3, x = 0, y = -370, col = 0, row = 2 }, r[3])
+      -- col 1 wraps LEFT by vert_col_w (80): x = 0 - 80*1 = -80, top resets to vstarty
+      assert.are.same({ index = 4, x = -80, y = -130, col = 1, row = 0 }, r[4])
+      assert.are.same({ index = 6, x = -80, y = -370, col = 1, row = 2 }, r[6])
+      -- col 2: x = -160, only 2 badges left
+      assert.are.same({ index = 7, x = -160, y = -130, col = 2, row = 0 }, r[7])
+      assert.are.same({ index = 8, x = -160, y = -250, col = 2, row = 1 }, r[8])
+    end)
+
+    it("vertical 10 badges -> spills into a 4th column (one badge)", function()
+      local r = M.compute_badge_positions(base(10))
+      assert.are.equal(10, #r)
+      -- 3 + 3 + 3 = 9 in cols 0-2; badge 10 opens col 3 at x = -240.
+      assert.are.same({ index = 9, x = -160, y = -370, col = 2, row = 2 }, r[9])
+      assert.are.same({ index = 10, x = -240, y = -130, col = 3, row = 0 }, r[10])
+    end)
+
+    it("backpack Mode A (bpmode 1) shifts every column LEFT by backpack_shift_x and frees col 0's bottom", function()
+      -- vstartx = vert_x(0) - backpack_shift_x(100) = -100. col 0 bottom uses `free` (40) not full(65)
+      -- because bpmode==1; cap still 3 (bottom 40 -> percol 3). col 1 at x = -100 - 80 = -180.
+      local r = M.compute_badge_positions(base(4, { bpmode = 1 }))
+      assert.are.equal(4, #r)
+      assert.are.same({ index = 1, x = -100, y = -130, col = 0, row = 0 }, r[1])
+      assert.are.same({ index = 3, x = -100, y = -370, col = 0, row = 2 }, r[3])
+      assert.are.same({ index = 4, x = -180, y = -130, col = 1, row = 0 }, r[4])
+    end)
+
+    it("backpack Mode B (bpmode 2) adds backpack_bottom_extra to the columns-2+ bottom keep-out", function()
+      -- free = vert_bottom_reserve_free(40) + backpack_bottom_extra(20) = 60. At the baseline geometry
+      -- percol_count(...,-130,60,-120) = floor((-130-60+514.2857-60)/120)+1 = floor(2.202)+1 = 3 -- the
+      -- extra 20 is not enough to drop a row here, so x/y match the bpmode-0 wrap. (Behaviour-neutral:
+      -- the +extra is plumbed through column_reserve's `free` exactly as in modmain; the on-screen wrap
+      -- only differs from bpmode 0 when the extra reserve actually crosses a row-pitch boundary.)
+      local r = M.compute_badge_positions(base(8, { bpmode = 2 }))
+      assert.are.equal(8, #r)
+      assert.are.same({ index = 1, x = 0, y = -130, col = 0, row = 0 }, r[1])
+      assert.are.same({ index = 4, x = -80, y = -130, col = 1, row = 0 }, r[4])
+      assert.are.same({ index = 7, x = -160, y = -130, col = 2, row = 0 }, r[7])
+    end)
+
+    it("second-row dodge (second_row_cols 1) pushes col 0's top DOWN by second_row_reserve", function()
+      -- dodge = dodge_cols(0, 1) = 1. col 0 < dodge -> top = vstarty - reserve = -130 - 75 = -205, and
+      -- it keeps the FULL bottom reserve (65) -> percol_count(...,-205,65,-120) = floor(1.5357)+1 = 2.
+      -- col 1 (1 not < 1) -> top back to vstarty(-130), free bottom. So col 0 holds 2, col 1 the rest.
+      local r = M.compute_badge_positions(base(4, { second_row_cols = 1, second_row_reserve = 75 }))
+      assert.are.equal(4, #r)
+      assert.are.same({ index = 1, x = 0, y = -205, col = 0, row = 0 }, r[1])
+      -- y = -205 + (-120) = -325
+      assert.are.same({ index = 2, x = 0, y = -325, col = 0, row = 1 }, r[2])
+      -- col 1 top is NOT dodged -> back to vstarty
+      assert.are.same({ index = 3, x = -80, y = -130, col = 1, row = 0 }, r[3])
+      assert.are.same({ index = 4, x = -80, y = -250, col = 1, row = 1 }, r[4])
+    end)
+
+    it("position_mode 0/1 reuse the phud anchor instead of vert_x/vert_y", function()
+      -- position_mode 0 -> vstartx/vstarty = phud_xpos(-100)/phud_ypos(120). y stacks down by vert_gap.
+      local r = M.compute_badge_positions(base(2, { position_mode = 0 }))
+      assert.are.same({ index = 1, x = -100, y = 120, col = 0, row = 0 }, r[1])
+      assert.are.same({ index = 2, x = -100, y = 0, col = 0, row = 1 }, r[2])
+    end)
+
+    it("show_substatus false selects the compact gap (vert_gap_compact) for the row pitch", function()
+      -- vgap = vert_gap_compact = -90. rowpitch 90 -> percol_count(...,-130,65,-90) = 3. y steps by -90.
+      local r = M.compute_badge_positions(base(4, { show_substatus = false }))
+      assert.are.same({ index = 1, x = 0, y = -130, col = 0, row = 0 }, r[1])
+      assert.are.same({ index = 2, x = 0, y = -220, col = 0, row = 1 }, r[2])
+      assert.are.same({ index = 3, x = 0, y = -310, col = 0, row = 2 }, r[3])
+      -- 4th wraps to col 1 at the un-pushed top
+      assert.are.same({ index = 4, x = -80, y = -130, col = 1, row = 0 }, r[4])
+    end)
+  end)
 end)

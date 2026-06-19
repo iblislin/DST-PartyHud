@@ -147,3 +147,46 @@ describe("partyhud badge — is_low_hp", function()
     assert.is_false(M.is_low_hp(120, 100, 0.99))
   end)
 end)
+
+describe("partyhud badge — layer_order", function()
+  it("centre style -> ring_art, avatar_head, hp_number (back to front)", function()
+    assert.are.same({ "ring_art", "avatar_head", "hp_number" }, M.layer_order("centre"))
+  end)
+
+  it("corner style -> ring_art, hp_number (no centre head in the stack)", function()
+    assert.are.same({ "ring_art", "hp_number" }, M.layer_order("corner"))
+  end)
+
+  it("off style -> ring_art, hp_number (no avatar_head)", function()
+    assert.are.same({ "ring_art", "hp_number" }, M.layer_order("off"))
+  end)
+
+  it("nil style -> ring_art, hp_number (default, no avatar_head)", function()
+    assert.are.same({ "ring_art", "hp_number" }, M.layer_order(nil))
+  end)
+
+  it("non-centre styles never include avatar_head", function()
+    local function has_avatar_head(order)
+      for _, layer in ipairs(order) do
+        if layer == "avatar_head" then
+          return true
+        end
+      end
+      return false
+    end
+    assert.is_false(has_avatar_head(M.layer_order("corner")))
+    assert.is_false(has_avatar_head(M.layer_order("off")))
+    assert.is_false(has_avatar_head(M.layer_order(nil)))
+    -- sanity: the centre style DOES include it (guards against the predicate trivially returning false)
+    assert.is_true(has_avatar_head(M.layer_order("centre")))
+  end)
+
+  it("hp_number is the LAST (front) element in every style -- the z-order property the bug violated", function()
+    for _, style in ipairs({ "centre", "corner", "off" }) do
+      local order = M.layer_order(style)
+      assert.are.equal("hp_number", order[#order])
+    end
+    local nil_order = M.layer_order(nil)
+    assert.are.equal("hp_number", nil_order[#nil_order])
+  end)
+end)

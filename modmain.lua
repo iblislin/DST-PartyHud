@@ -201,46 +201,16 @@ else --no minimap
   phud_ypos = 120
 end
 
--- Vertical layout wrap: how many badges fit in one column before running off the
--- screen bottom. Badges live in the statusdisplays space (scaled 1.4 in controls.lua),
--- itself under topleft_root (scaled by GetHUDScale() AND SCALEMODE_PROPORTIONAL), so the visible
--- height in badge-local units = screenheight / (hudscale * 1.4 * prop). Detect it so small screens /
--- large HUD-size settings wrap to a second column instead of overflowing off-screen.
-local function compute_percol(vy, bottom_reserve)
-  local scrnw, scrnh
-  if GLOBAL.TheSim ~= nil and GLOBAL.TheSim.GetScreenSize ~= nil then
-    scrnw, scrnh = GLOBAL.TheSim:GetScreenSize()
-  end
-  local hudscale = 1
-  if GLOBAL.TheFrontEnd ~= nil and GLOBAL.TheFrontEnd.GetHUDScale ~= nil then
-    hudscale = GLOBAL.TheFrontEnd:GetHUDScale() or 1
-  end
-  if DEBUG_SHOWALL and (scrnh == nil or scrnh <= 0 or scrnw == nil or scrnw <= 0 or hudscale <= 0) then
-    print("[PartyHud DEBUG] compute_percol fallback: scrnh=" .. tostring(scrnh) .. " hudscale=" .. tostring(hudscale))
-  end
-  -- reserve a FIXED keep-out zone at the bottom for the game's map (M) button. It must be a
-  -- fixed absolute distance, NOT the row pitch: the compact (sub-gauges off) gap is tighter, so
-  -- a per-row reserve packs an extra badge into the button. Fixed keeps equal clearance in both modes.
-  bottom_reserve = bottom_reserve or VERT_BOTTOM_RESERVE -- default = full Map(M)-button keep-out (col 0); later columns pass a smaller value
-  local vgap = show_substatus and VERT_GAP or VERT_GAP_COMPACT -- effective gap (tighter when sub-rings hidden)
-  -- The prop/usable/wrap arithmetic (incl. the invalid-screen PERCOL_FALLBACK=6 guard) lives in
-  -- partyhud_layout.percol_count -- behaviour-neutral extraction (busted-tested with zero engine deps).
-  local n = layoutmath.percol_count(scrnw, scrnh, hudscale, vy, bottom_reserve, vgap)
-  if DEBUG_SHOWALL then
-    print(
-      string.format(
-        "[PartyHud DEBUG] scrnw=%s scrnh=%s hudscale=%s vy=%.0f gap=%.0f per_col=%d",
-        tostring(scrnw),
-        tostring(scrnh),
-        tostring(hudscale),
-        vy,
-        vgap,
-        n
-      )
-    )
-  end
-  return n
-end
+-- Vertical layout wrap: how many badges fit in one column before running off the screen bottom. Badges
+-- live in the statusdisplays space (scaled 1.4 in controls.lua), itself under topleft_root (scaled by
+-- GetHUDScale() AND SCALEMODE_PROPORTIONAL), so the visible height in badge-local units = screenheight /
+-- (hudscale * 1.4 * prop). Detect it so small screens / large HUD-size settings wrap to a second column
+-- instead of overflowing off-screen.
+--
+-- v2026.11: the per-column count arithmetic lives in layoutmath.percol_count (the invalid-screen
+-- PERCOL_FALLBACK=6 guard + the prop/usable/wrap math), and layout_badges now delegates the WHOLE
+-- position loop to layoutmath.compute_badge_positions (which calls percol_count internally). The old
+-- compute_percol engine-read wrapper is gone -- layout_badges does those reads inline now.
 
 -- v2026.8: which backpack UI is active for the LOCAL player? 0=none, 1=side floating (covers our
 -- right-side badges), 2=integrated (taller bottom inventory bar). Client-only; everything nil-guarded.
@@ -305,70 +275,61 @@ local function status_second_row(sd)
 end
 
 -- Position every badge. Vertical layout wraps into columns sized by the live screen height.
+-- v2026.11: the position ARITHMETIC (horizontal-row formula + vertical column-wrap/dodge/reserve loop)
+-- is extracted to the pure, busted-tested layoutmath.compute_badge_positions. This function keeps ALL
+-- the engine reads (screen size, HUD scale, backpack mode) -- it gathers them into an opts table, asks
+-- the pure fn for each slot's (x, y), then applies them via :SetPosition. Behaviour-neutral: the same
+-- formulas run, only the call site moved from inline-compute to consume-the-returned-array.
 local function layout_badges(badgearray)
   if badgearray == nil then
     return
   end
-  if layout ~= 2 then
-    --horizontal row
-    for i = 1, #badgearray do
-      badgearray[i]:SetPosition(phud_xpos + (-70 * i), phud_ypos, 0)
-    end
-    return
+  -- engine reads: live screen size + HUD scale. These are passed into the pure fn, which calls
+  -- layoutmath.percol_count internally (the prop/usable wrap math) to size each column.
+  local scrnw, scrnh
+  if GLOBAL.TheSim ~= nil and GLOBAL.TheSim.GetScreenSize ~= nil then
+    scrnw, scrnh = GLOBAL.TheSim:GetScreenSize()
   end
-  -- vertical: Minimap/XL reuse the phud anchor; Standard uses VERT_X/VERT_Y. Stack down by
-  -- VERT_GAP, wrapping to a new column to the LEFT every per_col badges (the list is anchored
-  -- to the right edge of the screen, so extra columns must grow leftward to stay on-screen).
-  local vstartx, vstarty = VERT_X, VERT_Y
-  if positional == 0 or positional == 1 then
-    vstartx, vstarty = phud_xpos, phud_ypos
+  local hudscale = 1
+  if GLOBAL.TheFrontEnd ~= nil and GLOBAL.TheFrontEnd.GetHUDScale ~= nil then
+    hudscale = GLOBAL.TheFrontEnd:GetHUDScale() or 1
   end
-  local vgap = show_substatus and VERT_GAP or VERT_GAP_COMPACT -- effective gap (tighter when sub-rings hidden)
   -- v2026.8: an equipped backpack overlaps our HUD differently per UI mode (see backpack_layout_mode):
   --  * Mode A (1, side/floating): its container hugs the right screen edge over our badges -> shift ALL
-  --    columns LEFT (done here, before per-column x is computed). That moves col 0 off the Map(M) button,
-  --    so col 0 then uses the small `free` reserve like the other columns instead of the full Map reserve.
+  --    columns LEFT. That moves col 0 off the Map(M) button, so col 0 then uses the small `free` reserve
+  --    like the other columns instead of the full Map reserve.
   --  * Mode B (2, integrated): the bottom inventory bar grows taller -> reserve extra bottom space on the
   --    columns-2+ `free` keep-out (those columns extend toward the screen bottom).
-  local bpmode = backpack_layout_mode()
-  if bpmode == 1 then
-    vstartx = vstartx - BACKPACK_SHIFT_X
-  end
-  -- v2026.8: each column's available height differs by its on-screen obstacles, so capacities are
-  -- computed PER COLUMN (no longer a uniform per_col):
-  --  * TOP: the top-right status "second row" (moisture meter / Abigail / inspiration) sits exactly
-  --    where the leading column(s)' top would be, so push the first `dodge_cols` columns' TOP down by
-  --    `second_row_reserve` (the deepest active badge's need -- bigger for Wigfrid's y-130 inspiration
-  --    than the moisture meter/Abigail). `dodge_cols` is `second_row_cols` (0/1/2 -- it's 2 when rain +
-  --    Abigail/inspiration widens the band, displacing the moisture meter onto col 1). This top dodge
-  --    applies in EVERY mode -- Mode A's left shift clears the backpack, not the status cluster.
-  --  * BOTTOM: ONLY col 0 sits under the Map(M) button -> full VERT_BOTTOM_RESERVE (unless Mode A
-  --    shifted it off); later columns extend toward the screen bottom (`free`, +BACKPACK_BOTTOM_EXTRA
-  --    in Mode B's taller-bar case).
-  local free = VERT_BOTTOM_RESERVE_FREE + ((bpmode == 2) and BACKPACK_BOTTOM_EXTRA or 0)
-  -- The top dodge (status second row) is separate from the Mode-A left shift (backpack). In Mode A the
-  -- columns shift LEFT ~BACKPACK_SHIFT_X, so the (fixed, top-right) status band covers FEWER of them:
-  -- a single home-column badge (moisture alone, or a resting char badge) is cleared by the shift; only
-  -- the WIDE case (rain + Abigail/inspiration DISPLACES the moisture meter left) still lands one badge
-  -- under the shifted col 0 -> dodge just col 0 there (col 1 has moved left, now clear -- no gap).
-  -- Outside Mode A the band covers `second_row_cols` (0/1/2) columns directly.
-  local dodge_cols = layoutmath.dodge_cols(bpmode, second_row_cols)
-  -- Fill top-to-bottom, wrapping LEFTWARD (right-anchored list). compute_percol always returns >=1 so
-  -- col advances and i grows each pass; `col <= n` is a belt-and-suspenders bound on the loop.
-  local n = #badgearray
-  local i, col = 1, 0
-  while i <= n and col <= n do
-    local top, bottom =
-      layoutmath.column_reserve(col, dodge_cols, bpmode, vstarty, second_row_reserve, VERT_BOTTOM_RESERVE, free)
-    local cap = compute_percol(top, bottom)
-    for row = 0, cap - 1 do
-      if i > n then
-        break
-      end
-      badgearray[i]:SetPosition(vstartx - VERT_COL_W * col, top + vgap * row, 0)
-      i = i + 1
-    end
-    col = col + 1
+  -- The top dodge (status second row -- moisture meter / Abigail / inspiration) is separate from the
+  -- Mode-A left shift; both are applied inside compute_badge_positions exactly as before.
+  local opts = {
+    layout_mode = layout,
+    position_mode = positional,
+    phud_xpos = phud_xpos,
+    phud_ypos = phud_ypos,
+    badge_count = #badgearray,
+    show_substatus = show_substatus,
+    screen_w = scrnw,
+    screen_h = scrnh,
+    hudscale = hudscale,
+    bpmode = backpack_layout_mode(),
+    second_row_cols = second_row_cols,
+    second_row_reserve = second_row_reserve,
+    -- layout constants (modmain stays the single source of truth; passed in, not hardcoded in the module)
+    vert_x = VERT_X,
+    vert_y = VERT_Y,
+    vert_gap = VERT_GAP,
+    vert_gap_compact = VERT_GAP_COMPACT,
+    vert_col_w = VERT_COL_W,
+    vert_bottom_reserve = VERT_BOTTOM_RESERVE,
+    vert_bottom_reserve_free = VERT_BOTTOM_RESERVE_FREE,
+    backpack_shift_x = BACKPACK_SHIFT_X,
+    backpack_bottom_extra = BACKPACK_BOTTOM_EXTRA,
+    horizontal_step = -70, -- per-badge x step in the horizontal row
+  }
+  local positions = layoutmath.compute_badge_positions(opts)
+  for _, p in ipairs(positions) do
+    badgearray[p.index]:SetPosition(p.x, p.y, 0)
   end
 end
 
@@ -435,6 +396,33 @@ GLOBAL.PartyHud_AvatarStyle = function(style)
   end
   print("[PartyHud] avatar style = " .. resolved)
   return resolved
+end
+-- luacheck: pop
+
+-- [DEBUG/util] runtime centre-avatar head-fit tuner from the client console, no reconnect needed:
+--   PartyHud_AvatarHeadFit(fit, y_nudge)  -> shrink/nudge the centre head to fit the HP ring
+-- The raw GetPlayerBadgeData scale/y_offset are tuned for the vanilla scoreboard (head under a .8 icon
+-- in a bigger frame); on PartyHud's smaller ring with no .8 parent they overflow. `fit` multiplies both
+-- scale and y_offset; `y_nudge` is an absolute post-shrink y tweak. Both nil -> the helper's constant
+-- defaults (M.AVATAR_HEAD_FIT / M.AVATAR_HEAD_Y_NUDGE). Sets the badge class-level override, then clears
+-- each live badge's cached avatar identity so the next UpdateBadges rebuilds the head with the new geom
+-- (SetAvatar applies the scale/position only inside its `changed` block). Client-only (ThePlayer / HUD
+-- nil on a dedicated server -> no-op). Returns fit, y_nudge.
+-- luacheck: push ignore 122
+GLOBAL.PartyHud_AvatarHeadFit = function(fit, y_nudge)
+  phud_custombadge.SetHeadFitOverride(fit, y_nudge)
+  local p = _G.ThePlayer
+  local sd = p ~= nil and p.HUD ~= nil and p.HUD.controls ~= nil and p.HUD.controls.status or nil
+  if sd ~= nil and sd.badgearray ~= nil then
+    for _, b in ipairs(sd.badgearray) do
+      b._avatar_identity = nil -- force SetAvatar to re-run its `changed` block and re-apply the geom
+    end
+    if p.UpdateBadges ~= nil then
+      p.UpdateBadges()
+    end
+  end
+  print("[PartyHud] avatar head fit = " .. tostring(fit) .. " nudge = " .. tostring(y_nudge))
+  return fit, y_nudge
 end
 -- luacheck: pop
 
@@ -1104,6 +1092,10 @@ AddSimPostInit(function()
   if GLOBAL.TheWorld == nil or not GLOBAL.TheWorld.ismastersim then
     return
   end
+  -- v2026.11: per-cycle liveness counter (server-side), stamped onto the partyhud_heartbeat netvar at
+  -- the END of each successful broadcast so the client can distinguish "task alive" from "blob unchanged".
+  -- Scoped to this closure (not a module global) since only the broadcast task below reads/bumps it.
+  local heartbeat_seq = 0
   -- ~2 Hz; for T3 sends UNCONDITIONALLY every tick (even an empty roster) so the transport can be
   -- proven headless with no players online. The dirty-coalescing / burst / keepalive cadence
   -- optimization is a LATER task (T6) -- intentionally not built here.
@@ -1176,6 +1168,16 @@ AddSimPostInit(function()
         if DEBUG_XSHARD then
           print("[PartyHud] [XSHARD] published " .. #merged .. " records to carrier (" .. #foreign .. " foreign)")
         end
+        -- v2026.11 fix: bump a 1-byte liveness heartbeat on the SAME entity, LAST (only after a fully
+        -- completed cycle). net_string:set fires the client dirty event only on a value CHANGE, so an
+        -- idle/stable foreign roster (identical blob) never refreshed the client's freshness clock and
+        -- healthy far teammates wrongly read as stale. The heartbeat changes every tick (mod 256) so its
+        -- dirty event always fires while the task runs; a wedged task stops it and the client correctly
+        -- detects stale (the original intent). Same entity as the blob, but nil-guard defensively.
+        if GLOBAL.TheWorld.net.partyhud_heartbeat ~= nil then
+          heartbeat_seq = (heartbeat_seq + 1) % 256
+          GLOBAL.TheWorld.net.partyhud_heartbeat:set(heartbeat_seq)
+        end
       end
     end)
   )
@@ -1191,6 +1193,12 @@ end)
 -- exactly one of them and TheWorld.net points at it.
 local function attach_carrier(inst)
   inst.partyhud_foreignblob = GLOBAL.net_string(inst.GUID, "partyhud.foreignblob", "partyhud_foreignblobdirty")
+  -- v2026.11: a 1-byte liveness heartbeat on the SAME network entity, declared IDENTICALLY on server
+  -- and client (like the blob above -- a mismatched declaration breaks deserialization). The server
+  -- bumps it every broadcast tick; the client listener below stamps the freshness clock off ITS dirty
+  -- event, which -- unlike the blob's content-gated event -- fires every tick, so an unchanged idle
+  -- roster no longer reads as stale.
+  inst.partyhud_heartbeat = GLOBAL.net_byte(inst.GUID, "partyhud.heartbeat", "partyhud_heartbeatdirty")
   if not GLOBAL.TheWorld.ismastersim then
     -- CLIENT: decode the blob into the client-side store whenever the server pushes a new one.
     -- Never throw on a bad/version-skewed blob -- log + keep the previous value, mirroring the
@@ -1219,6 +1227,19 @@ local function attach_carrier(inst)
       -- for an out-of-view player -- so the blob update MUST itself drive a badge refresh, or the
       -- new foreign record never renders until some unrelated local event happens to fire
       -- UpdateBadges. (Same guarded accessor as the client refresh path elsewhere.)
+      if _G.ThePlayer ~= nil and _G.ThePlayer.UpdateBadges ~= nil then
+        _G.ThePlayer.UpdateBadges()
+      end
+    end)
+    -- v2026.11 fix: the heartbeat dirty event fires every broadcast tick (its value always changes),
+    -- so THIS -- not the content-gated blob event -- is what keeps the freshness clock alive while the
+    -- server task runs. A wedged task stops the heartbeat -> the freshness check trips and stale
+    -- cross-shard badges hide (the original intent), WITHOUT hiding idle-but-healthy far teammates.
+    inst:ListenForEvent("partyhud_heartbeatdirty", function()
+      last_foreign_blob_time = GLOBAL.GetTime()
+      _foreign_stale_logged = false -- a live heartbeat re-arms the stale-log for the next real outage
+      -- drive a refresh so a badge hidden during a (real) stale window reappears promptly once the
+      -- heartbeat resumes; same guarded accessor as the blob listener and the client refresh path.
       if _G.ThePlayer ~= nil and _G.ThePlayer.UpdateBadges ~= nil then
         _G.ThePlayer.UpdateBadges()
       end

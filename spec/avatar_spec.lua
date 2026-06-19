@@ -185,6 +185,48 @@ local function near(a, b)
   return math.abs(a - b) <= 1e-9
 end
 
+describe("partyhud_avatar — avatar_head_geom", function()
+  -- raw GetPlayerBadgeData values are tuned for the vanilla scoreboard (.8 parent + bigger frame);
+  -- avatar_head_geom shrinks scale + y_offset proportionally by `fit` to fit PartyHud's smaller ring,
+  -- then adds an absolute y_nudge. M.AVATAR_HEAD_FIT default = 0.6, M.AVATAR_HEAD_Y_NUDGE default = 0.
+  it("default fit (0.6) is applied to both scale and y_offset when fit is nil", function()
+    local s, yo = M.avatar_head_geom(0.23, -50)
+    assert.is_true(near(s, 0.23 * 0.6)) -- 0.138
+    assert.is_true(near(yo, -50 * 0.6)) -- -30 (y_nudge default 0)
+  end)
+
+  it("an explicit fit overrides the default for both scale and y_offset", function()
+    local s, yo = M.avatar_head_geom(0.23, -50, 0.5)
+    assert.is_true(near(s, 0.23 * 0.5)) -- 0.115
+    assert.is_true(near(yo, -50 * 0.5)) -- -25
+  end)
+
+  it("y_nudge is added as an absolute (unscaled) offset after the proportional shrink", function()
+    local s, yo = M.avatar_head_geom(0.23, -50, 0.5, 4)
+    assert.is_true(near(s, 0.23 * 0.5)) -- nudge does NOT touch scale
+    assert.is_true(near(yo, -50 * 0.5 + 4)) -- -25 + 4 = -21
+  end)
+
+  it("y_offset scales proportionally with fit (the bug: raw -50 overflows; fit pulls it in)", function()
+    local _, yo_full = M.avatar_head_geom(0.23, -50, 1.0)
+    local _, yo_half = M.avatar_head_geom(0.23, -50, 0.5)
+    assert.is_true(near(yo_full, -50)) -- fit=1 is a no-op (matches raw engine value)
+    assert.is_true(near(yo_half, -25)) -- half the fit -> half the offset
+  end)
+
+  it("nil base_scale / base_y_offset are treated as 0", function()
+    local s, yo = M.avatar_head_geom(nil, nil, 0.6, 3)
+    assert.is_true(near(s, 0)) -- 0 * 0.6
+    assert.is_true(near(yo, 3)) -- 0 * 0.6 + 3
+  end)
+
+  it("explicit fit + explicit y_nudge with nil base inputs -> just the nudge on y, 0 on scale", function()
+    local s, yo = M.avatar_head_geom(nil, nil, 0.5, -2)
+    assert.is_true(near(s, 0))
+    assert.is_true(near(yo, -2))
+  end)
+end)
+
 describe("partyhud_avatar — name_colour", function()
   -- DEFAULT_PLAYER_COLOUR (constants.lua:1765) = RGB(153,153,153) = {0.6,0.6,0.6} GREY
   it("local player colour -> {r,g,b,1} (full opacity)", function()
