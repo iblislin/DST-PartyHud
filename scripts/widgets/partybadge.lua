@@ -444,6 +444,12 @@ function PartyBadge:_apply_effective_style()
   end
   self.avatar_style = eff
   self._avatar_identity = nil -- force the next SetAvatar to rebuild the texture/anim
+  -- NOTE: since the v2026.11 unify, either child can serve either style (a mod/unknown char uses the flat
+  -- avatar_corner even in centre; a renderable char uses avatar_head even in corner), so these hides NO
+  -- LONGER mean "hide the unused child". They are a cheap pre-clean; SetAvatar is the AUTHORITATIVE
+  -- show/hide -- it always re-runs after a style change (identity was nil'd -> changed) and unconditionally
+  -- hides the non-active child for the resolved render path. Kept (not dropped) so the console
+  -- SetAvatarStyle path, which need not be immediately followed by a refresh, never leaves a stale child up.
   if self.avatar_style ~= "corner" and self.avatar_corner ~= nil then
     self.avatar_corner:Hide()
   end
