@@ -426,6 +426,30 @@ GLOBAL.PartyHud_AvatarHeadFit = function(fit, y_nudge)
 end
 -- luacheck: pop
 
+-- [DEBUG/util] runtime corner-avatar head geometry tuner from the client console, no reconnect needed:
+--   PartyHud_AvatarHeadCornerFit(fit, x, y)  -> scale + position the corner head inside the ring corner
+-- Mirrors PartyHud_AvatarHeadFit. `fit` multiplies the raw GetPlayerBadgeData scale; x/y is the absolute
+-- top-left inset. All nil -> avatar_head_corner_geom's constant defaults. Clears each live badge's cached
+-- avatar identity so the next UpdateBadges rebuilds with the new geom. Client-only (no-op on a dedicated
+-- server where ThePlayer/HUD are nil). Returns fit, x, y.
+-- luacheck: push ignore 122
+GLOBAL.PartyHud_AvatarHeadCornerFit = function(fit, x, y)
+  phud_custombadge.SetHeadCornerOverride(fit, x, y)
+  local p = _G.ThePlayer
+  local sd = p ~= nil and p.HUD ~= nil and p.HUD.controls ~= nil and p.HUD.controls.status or nil
+  if sd ~= nil and sd.badgearray ~= nil then
+    for _, b in ipairs(sd.badgearray) do
+      b._avatar_identity = nil -- force SetAvatar to re-run its `changed` block and re-apply the geom
+    end
+    if p.UpdateBadges ~= nil then
+      p.UpdateBadges()
+    end
+  end
+  print("[PartyHud] avatar corner fit = " .. tostring(fit) .. " x = " .. tostring(x) .. " y = " .. tostring(y))
+  return fit, x, y
+end
+-- luacheck: pop
+
 --constructor for badge array
 local function onstatusdisplaysconstruct(self)
   self.badgearray = {}
@@ -565,7 +589,7 @@ local function onstatusdisplaysconstruct(self)
     -- read by BOTH the local block (authoritative were/stage userflags) and the foreign block (which has
     -- no local entity at all). ZERO wire change -- the table is already maintained cluster-wide. Names
     -- live here too (was a separate inner build); the foreign block reads namebyuserid from here.
-    local namebyuserid, prefabbyuserid, colourbyuserid, userflagsbyuserid = {}, {}, {}, {}
+    local namebyuserid, prefabbyuserid, colourbyuserid, userflagsbyuserid, base_skinbyuserid = {}, {}, {}, {}, {}
     do
       local ct = _G.TheNet ~= nil and _G.TheNet:GetClientTable() or nil
       if ct ~= nil then
@@ -575,6 +599,7 @@ local function onstatusdisplaysconstruct(self)
             prefabbyuserid[c.userid] = c.prefab
             colourbyuserid[c.userid] = c.colour
             userflagsbyuserid[c.userid] = c.userflags or 0
+            base_skinbyuserid[c.userid] = c.base_skin
           end
         end
       end
@@ -614,7 +639,12 @@ local function onstatusdisplaysconstruct(self)
         -- cluster userflags (authoritative; the entity tags vary by character). Table fallback covers
         -- the brief window before the entity's playercolour/prefab are populated.
         b:SetPlayerColour(v.playercolour or colourbyuserid[v.userid], name_colour_on)
-        b:SetAvatar(v.prefab or prefabbyuserid[v.userid], userflagsbyuserid[v.userid] or 0, false)
+        b:SetAvatar(
+          v.prefab or prefabbyuserid[v.userid],
+          userflagsbyuserid[v.userid] or 0,
+          false,
+          base_skinbyuserid[v.userid]
+        )
         b:SetPercent(n.hpcur, n.maxhp, n.hppenalty)
         b:SetStatus(n.hunger, n.hungermax, n.sanity, n.sanitymax, n.onfire, n.overheating, n.freezing, n.sanitypenalty)
         b:SetSanityRate(n.sanityrate)
@@ -714,7 +744,12 @@ local function onstatusdisplaysconstruct(self)
           b:SetName(namebyuserid[rec.userid] or "?")
           -- v2026.11 identity (foreign): all from the cluster roster (no local entity exists).
           b:SetPlayerColour(colourbyuserid[rec.userid], name_colour_on)
-          b:SetAvatar(prefabbyuserid[rec.userid], userflagsbyuserid[rec.userid] or 0, true)
+          b:SetAvatar(
+            prefabbyuserid[rec.userid],
+            userflagsbyuserid[rec.userid] or 0,
+            true,
+            base_skinbyuserid[rec.userid]
+          )
           b:SetPercent(n.hpcur, n.maxhp, n.hppenalty)
           -- SIMPLIFIED status: hunger/sanity + penalty shown, but NO live thermal pulse for far
           -- players (fire/overheat/freeze forced false -- misleading at ~1s lag).
