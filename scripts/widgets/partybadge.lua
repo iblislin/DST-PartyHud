@@ -48,6 +48,12 @@ local AVATAR_CORNER_SCALE = 0.45
 local AVATAR_CORNER_X = -20
 local AVATAR_CORNER_Y = 18
 
+-- v2026.11 flat-avatar centre preset: a non-renderable (mod/unknown) character cannot build the
+-- animated head, so in the CENTRE style it shows the flat atlas image scaled up + centred (vs the
+-- corner preset above). Provisional; the common case (base/random characters) uses the animated head.
+local AVATAR_FLAT_CENTRE_SCALE = 1.0
+local AVATAR_FLAT_CENTRE_Y = -4
+
 local PartyBadge = Class(Badge, function(self, owner)
   -- modern health badge: anim=nil -> status_meter path; iconbuild "status_health"
   -- overrides the heart icon onto the frame; red tint; dont_update_while_paused=true
@@ -276,121 +282,147 @@ function PartyBadge:_HideAvatars()
   end
 end
 
--- v2026.11: render the teammate's avatar for the current style. Called per refresh from UpdateBadges.
+-- v2026.11: render the teammate's avatar for the current style, reflecting their base_skin. Called per
+-- refresh from UpdateBadges.
 --   prefab    : character prefab string (local v.prefab, or the GetClientTable record prefab); nil -> unknown
 --   idflags   : packed ghost + character-state bits (avatarmath.packidflags / a raw userflags int)
 --   is_foreign: dims to FOREIGN_ALPHA (data ~1s stale), matching the rest of the badge
--- style is set separately via SetAvatarStyle (config-driven); SetAvatar is a no-op when style == "off".
--- The avatar children are created lazily so an "off" badge pays nothing. identity_changed gates the
--- (cheaper-to-skip) texture/anim rebuild; alpha is always re-asserted (foreign flip is cheap).
-function PartyBadge:SetAvatar(prefab, idflags, is_foreign)
-  -- Cache the args so a later thermal toggle (in SetStatus) can re-render the head<->corner swap
-  -- without UpdateBadges supplying fresh args. Stored unconditionally (even for the "off" return
-  -- below) so the cache is always the latest call's view of this teammate.
-  self._last_avatar_args = { prefab = prefab, idflags = idflags, is_foreign = is_foreign }
+--   base_skin : the player's character skin id (GetClientTable().base_skin), e.g. "wilson_formal";
+--               nil/"" -> the plain prefab.."_none" head. Reflected in BOTH centre and corner styles.
+-- A renderable character (classify base/random) uses the animated head at the active style's geometry;
+-- a non-renderable one (mod/unknown) uses the flat atlas image (crash-proof always-loaded fallback) at
+-- the active style's geometry. SetAvatar is a no-op when style == "off". Children are created lazily so
+-- an "off" badge pays nothing. identity_changed (which already compares base_skin) gates the texture/anim
+-- rebuild; alpha is always re-asserted (foreign flip is cheap).
+function PartyBadge:SetAvatar(prefab, idflags, is_foreign, base_skin)
+  self._last_avatar_args = { prefab = prefab, idflags = idflags, is_foreign = is_foreign, base_skin = base_skin }
   if self.avatar_style == "off" then
     self:_HideAvatars()
     return
   end
   local a = (is_foreign and FOREIGN_ALPHA) or FULL_ALPHA
-  local new_identity = { prefab = prefab, idflags = idflags or 0 }
+  local new_identity = { prefab = prefab, idflags = idflags or 0, base_skin = base_skin }
   local changed = avatarmath.identity_changed(self._avatar_identity, new_identity)
+  local style = self.avatar_style
 
-  if self.avatar_style == "corner" then
-    if self.avatar_head ~= nil then
-      self.avatar_head:Hide()
-    end
-    if self.avatar_corner == nil then
-      self.avatar_corner = self:AddChild(Image(avatarmath.DEFAULT_ATLAS, "avatar_unknown.tex"))
-      self.avatar_corner:SetScale(AVATAR_CORNER_SCALE)
-      self.avatar_corner:SetPosition(AVATAR_CORNER_X, AVATAR_CORNER_Y, 0)
-      self.avatar_corner:SetClickable(false)
-    end
-    if changed then
-      -- classify needs the engine character lists / mod avatar locations; read them here (engine
-      -- side) and delegate the bucket + atlas/tex to the pure module.
-      local cls = avatarmath.classify(prefab, DST_CHARACTERLIST, MODCHARACTERLIST)
-      local atlas, tex = avatarmath.atlas_and_tex(prefab, cls, MOD_AVATAR_LOCATIONS)
-      self.avatar_corner:SetTexture(atlas, tex)
-    end
-    self.avatar_corner:SetTint(1, 1, 1, a)
-    self.avatar_corner:Show()
-  end
-
-  if self.avatar_style == "centre" then
+  -- classify (engine character lists) decides anim-vs-flat; delegate the bucket -> boolean to the module.
+  local cls = avatarmath.classify(prefab, DST_CHARACTERLIST, MODCHARACTERLIST)
+  if avatarmath.head_renderable(cls) then
+    self:_RenderAvatarHead(prefab, idflags, base_skin, a, changed, style)
     if self.avatar_corner ~= nil then
       self.avatar_corner:Hide()
     end
-    if self.avatar_head == nil then
-      -- animated head child, ported from playerbadge.lua:_SetupHeads + Set. Parented to the badge
-      -- (not underNumber) so it draws above the ring fill; clickable off (purely cosmetic). SetFacing
-      -- is a UIAnim method (forwards to UITransform:SetFacing) -- NOT on the animstate; the symbol
-      -- Hide() calls ARE on the animstate (matches playerbadge.lua:36-42).
-      self.avatar_head = self:AddChild(UIAnim())
-      self.avatar_head:SetFacing(FACING_DOWN)
-      self.avatar_head:GetAnimState():Hide("ARM_carry")
-      self.avatar_head:GetAnimState():Hide("HAIR_HAT")
-      self.avatar_head:GetAnimState():Hide("HEAD_HAT")
-      self.avatar_head:GetAnimState():Hide("HEAD_HAT_NOHELM")
-      self.avatar_head:GetAnimState():Hide("HEAD_HAT_HELM")
-      self.avatar_head:SetClickable(false)
+  else
+    self:_RenderAvatarFlat(prefab, cls, a, changed, style)
+    if self.avatar_head ~= nil then
+      self.avatar_head:Hide()
     end
-    if changed then
-      local f = avatarmath.unpackidflags(idflags)
-      -- GetPlayerBadgeData (skinsutils.lua:1903) -> bank/anim/skin_mode/scale/y_offset for this
-      -- character's ghost / were / stage pose. nil prefab -> "wilson" default head (the engine fn
-      -- branches only on known characters, so an unknown prefab takes the generic else branch).
-      local bank, animation, skin_mode, scale, y_offset =
-        GetPlayerBadgeData(prefab, f.ghost, f.state1, f.state2, f.state3)
-      local hs = self.avatar_head:GetAnimState()
-      hs:SetBank(bank)
-      hs:PlayAnimation(animation, true)
-      -- per-badge perf parity with the vanilla scoreboard: animate only if the profile enables it,
-      -- else freeze on frame 0 (N badges animating is the cost the dropped head-corner combo avoided).
-      -- bare Profile (NOT GLOBAL.Profile): partybadge runs in full _G, where GLOBAL is undefined.
-      if Profile ~= nil and Profile.GetAnimatedHeadsEnabled ~= nil and Profile:GetAnimatedHeadsEnabled() then
-        hs:SetTime(math.random() * 1.5)
-      else
-        hs:SetTime(0)
-        hs:Pause()
-      end
-      -- The raw engine scale/y_offset are tuned for the vanilla scoreboard (head under a .8 icon in a
-      -- bigger frame); PartyHud draws on a smaller ring with no .8 parent, so shrink them to fit via the
-      -- pure helper. _head_fit / _head_ynudge are nil by default (helper uses its constants); the
-      -- PartyHud_AvatarHeadFit console fn tunes them at runtime. Re-read here so the rebuild picks up
-      -- a fresh override (this block runs when _avatar_identity was cleared -> `changed`).
-      local s, yo = avatarmath.avatar_head_geom(scale, y_offset, PartyBadge._head_fit, PartyBadge._head_ynudge)
-      self.avatar_head:SetScale(s)
-      self.avatar_head:SetPosition(0, yo, 0)
-      -- base build / skin: GetSkinData(base_skin or prefab.."_none") -> skins[skin_mode]; SetSkinsOnAnim
-      -- (components/skinner.lua:11, a GLOBAL) puts the base build on the anim. base_skin defaults handled
-      -- by SetSkinsOnAnim; pass the plain character head (full skin fidelity is out of scope).
-      local prefabname = (prefab ~= nil and prefab ~= "" and prefab) or "wilson"
-      local skindata = GetSkinData((prefab and (prefab .. "_none")) or "wilson_none")
-      local base_build = prefabname
-      if skindata ~= nil and skindata.skins ~= nil then
-        base_build = skindata.skins[skin_mode] or prefabname
-      end
-      SetSkinsOnAnim(hs, prefabname, base_build, {}, nil, skin_mode)
-    end
-    self.avatar_head:GetAnimState():SetMultColour(1, 1, 1, a)
-    self.avatar_head:Show()
-    -- z-order (back -> front): ring art < avatar head < HP number. The head is AddChild'd in this branch
-    -- AFTER the Badge base created self.num, so it draws over the number; on hover the number would be
-    -- hidden behind the face. MoveToFront re-appends self.num to the END of the shared parent (self) child
-    -- list so it draws above the head while the head still draws above the ring. self.num exists (Badge
-    -- base _ctor created it); idempotent + cheap, so re-running per centre SetAvatar is fine. Documented
-    -- source of truth for this stack: partyhud_badge.layer_order("centre").
+  end
+
+  -- Centre occupancy: whichever child is in the centre covers self.num + the thermal arrow. Keep the HP
+  -- number drawn ABOVE the avatar (MoveToFront re-appends it to the end of the shared parent's child list)
+  -- and force it hover-only so the face is unobstructed. The corner styles leave the centre clear, so the
+  -- HP number follows its configured visibility (restored on leaving centre by _apply_effective_style).
+  -- Source of truth for the centre stack: partyhud_badge.layer_order("centre").
+  if style == "centre" then
     self.num:MoveToFront()
-    -- HP number is hover-only while the centre head is up, so the face is unobstructed. Restored by
-    -- SetAvatarStyle("off"/"corner") via the _hp_number_was_hover reset below. Set the flag, then let
-    -- the single-writer hide (decision becomes false once the flag is true; allow_hide=true performs it).
     if not self._hp_number_was_hover then
       self._hp_number_was_hover = true
       self:_apply_hp_number_visibility(true)
     end
   end
   self._avatar_identity = new_identity
+end
+
+-- v2026.11: build/show the animated UIAnim head, skinned via base_skin, at the active style's geometry
+-- (centre = avatar_head_geom; corner = avatar_head_corner_geom). Lazy-creates the child on first use.
+function PartyBadge:_RenderAvatarHead(prefab, idflags, base_skin, a, changed, style)
+  if self.avatar_head == nil then
+    -- animated head child, ported from playerbadge.lua:_SetupHeads + Set. Parented to the badge so it
+    -- draws above the ring fill; clickable off (purely cosmetic). SetFacing is a UIAnim method; the
+    -- symbol Hide() calls are on the animstate (matches playerbadge.lua:36-42).
+    self.avatar_head = self:AddChild(UIAnim())
+    self.avatar_head:SetFacing(FACING_DOWN)
+    self.avatar_head:GetAnimState():Hide("ARM_carry")
+    self.avatar_head:GetAnimState():Hide("HAIR_HAT")
+    self.avatar_head:GetAnimState():Hide("HEAD_HAT")
+    self.avatar_head:GetAnimState():Hide("HEAD_HAT_NOHELM")
+    self.avatar_head:GetAnimState():Hide("HEAD_HAT_HELM")
+    self.avatar_head:SetClickable(false)
+  end
+  if changed then
+    local f = avatarmath.unpackidflags(idflags)
+    -- GetPlayerBadgeData (skinsutils.lua:1903) -> bank/anim/skin_mode/scale/y_offset for this character's
+    -- ghost / were / stage pose. nil/unknown prefab is not reached here (head_renderable gated it out).
+    local bank, animation, skin_mode, scale, y_offset =
+      GetPlayerBadgeData(prefab, f.ghost, f.state1, f.state2, f.state3)
+    local hs = self.avatar_head:GetAnimState()
+    hs:SetBank(bank)
+    hs:PlayAnimation(animation, true)
+    -- per-badge perf parity with the vanilla scoreboard: animate only if the profile enables it, else
+    -- freeze on frame 0. bare Profile (NOT GLOBAL.Profile): partybadge runs in full _G.
+    if Profile ~= nil and Profile.GetAnimatedHeadsEnabled ~= nil and Profile:GetAnimatedHeadsEnabled() then
+      hs:SetTime(math.random() * 1.5)
+    else
+      hs:SetTime(0)
+      hs:Pause()
+    end
+    -- geometry per style: centre shrinks scale + scoreboard y_offset to fit the ring; corner shrinks
+    -- scale + places the head at an absolute top-left inset. Re-read the class overrides each rebuild so
+    -- a console tuner change is picked up (this block runs when _avatar_identity was cleared -> changed).
+    if style == "corner" then
+      local s, x, y = avatarmath.avatar_head_corner_geom(
+        scale,
+        PartyBadge._head_corner_fit,
+        PartyBadge._head_corner_x,
+        PartyBadge._head_corner_y
+      )
+      self.avatar_head:SetScale(s)
+      self.avatar_head:SetPosition(x, y, 0)
+    else
+      local s, yo = avatarmath.avatar_head_geom(scale, y_offset, PartyBadge._head_fit, PartyBadge._head_ynudge)
+      self.avatar_head:SetScale(s)
+      self.avatar_head:SetPosition(0, yo, 0)
+    end
+    -- base build / skin: GetSkinData(base_skin or prefab.."_none") -> skins[skin_mode]; SetSkinsOnAnim
+    -- (components/skinner.lua:11, a GLOBAL) puts the base build on the anim. An invalid/unresolvable skin
+    -- -> GetSkinData nil -> base_build stays prefabname (today's safe fallback). Skin builds are shipped
+    -- assets, so rendering does not require owning the skin.
+    local prefabname = (prefab ~= nil and prefab ~= "" and prefab) or "wilson"
+    local skin = (base_skin ~= nil and base_skin ~= "" and base_skin) or (prefabname .. "_none")
+    local skindata = GetSkinData(skin)
+    local base_build = prefabname
+    if skindata ~= nil and skindata.skins ~= nil then
+      base_build = skindata.skins[skin_mode] or prefabname
+    end
+    SetSkinsOnAnim(hs, prefabname, base_build, {}, nil, skin_mode)
+  end
+  self.avatar_head:GetAnimState():SetMultColour(1, 1, 1, a)
+  self.avatar_head:Show()
+end
+
+-- v2026.11: build/show the flat atlas image (crash-proof fallback for mod/unknown characters) at the
+-- active style's geometry (corner = small top-left inset; centre = scaled-up + centred). Lazy-creates.
+function PartyBadge:_RenderAvatarFlat(prefab, cls, a, changed, style)
+  if self.avatar_corner == nil then
+    self.avatar_corner = self:AddChild(Image(avatarmath.DEFAULT_ATLAS, "avatar_unknown.tex"))
+    self.avatar_corner:SetClickable(false)
+  end
+  if changed then
+    -- classify already computed by the caller; resolve atlas/tex via the pure module (the flat atlas is
+    -- always loaded, so a far/mod teammate shows a generic head, never blank/crash).
+    local atlas, tex = avatarmath.atlas_and_tex(prefab, cls, MOD_AVATAR_LOCATIONS)
+    self.avatar_corner:SetTexture(atlas, tex)
+  end
+  if style == "centre" then
+    self.avatar_corner:SetScale(AVATAR_FLAT_CENTRE_SCALE)
+    self.avatar_corner:SetPosition(0, AVATAR_FLAT_CENTRE_Y, 0)
+  else
+    self.avatar_corner:SetScale(AVATAR_CORNER_SCALE)
+    self.avatar_corner:SetPosition(AVATAR_CORNER_X, AVATAR_CORNER_Y, 0)
+  end
+  self.avatar_corner:SetTint(1, 1, 1, a)
+  self.avatar_corner:Show()
 end
 
 -- v2026.11: reconcile the EFFECTIVE (rendered) style from {configured style, thermal active} and apply
@@ -447,6 +479,18 @@ PartyBadge._head_ynudge = nil
 function PartyBadge.SetHeadFitOverride(fit, ynudge)
   PartyBadge._head_fit = fit
   PartyBadge._head_ynudge = ynudge
+end
+
+-- v2026.11 corner-avatar head geometry overrides (CLASS-level statics, shared by every badge). nil ->
+-- avatar_head_corner_geom's constant defaults. Tuned at runtime via PartyHud_AvatarHeadCornerFit.
+PartyBadge._head_corner_fit = nil
+PartyBadge._head_corner_x = nil
+PartyBadge._head_corner_y = nil
+
+function PartyBadge.SetHeadCornerOverride(fit, x, y)
+  PartyBadge._head_corner_fit = fit
+  PartyBadge._head_corner_x = x
+  PartyBadge._head_corner_y = y
 end
 
 -- cur = current HP (absolute), max = FULL max HP, penaltypercent = max-HP penalty (0..1).
@@ -542,7 +586,7 @@ function PartyBadge:SetStatus(
     self._thermal_active = thermal
     if self:_apply_effective_style() and self._last_avatar_args ~= nil then
       local a = self._last_avatar_args
-      self:SetAvatar(a.prefab, a.idflags, a.is_foreign)
+      self:SetAvatar(a.prefab, a.idflags, a.is_foreign, a.base_skin)
     end
   end
 end
