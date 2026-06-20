@@ -1,6 +1,6 @@
 ---
 name: partyhud-release-preflight
-description: Shipping pre-flight checklist to run BEFORE tagging or publishing a new PartyHud release. Use this WHENEVER the user moves to ship / release / cut / roll out / tag / publish a new PartyHud version — phrasings like "ship v2026.X", "let's tag", "cut a release", "roll out a new release", "publish to Workshop", "push the new version", "release PartyHud", or any step toward creating a vYYYY.N tag — even if they never say "pre-flight" or "checklist". The #1 job is the production-accident guard: the release archive is built from an allowlist (release-manifest.txt), so a runtime-required Lua module left out of the allowlist ships a mod that fails to load in a live game. The checklist confirms the allowlist, runs the crash-safety audit + static gates (luacheck, the busted unit suite incl. the layout-snapshot golden baseline, StyLua), verifies the version bump, reminds about an in-engine load-smoke, THEN tags. Trigger on any release/ship/tag intent; under-triggering is the failure mode.
+description: Shipping pre-flight checklist to run BEFORE tagging or publishing a new PartyHud release. Use this WHENEVER the user moves to ship / release / cut / roll out / tag / publish a new PartyHud version — phrasings like "ship v2026.X", "let's tag", "cut a release", "roll out a new release", "publish to Workshop", "push the new version", "release PartyHud", or any step toward creating a vYYYY.N tag — even if they never say "pre-flight" or "checklist". The #1 job is the production-accident guard: the release archive is built from an allowlist (release-manifest.txt), so a runtime-required Lua module left out of the allowlist ships a mod that fails to load in a live game. The checklist confirms the allowlist, runs the crash-safety audit + static gates (luacheck, the busted unit suite incl. the layout-snapshot golden baseline, StyLua), verifies the version bump, syncs the README changelog + both (English / 繁中) Workshop BBCode descriptions + the Settings lists for the new version, reminds about an in-engine load-smoke, THEN tags. Trigger on any release/ship/tag intent; under-triggering is the failure mode.
 ---
 
 # PartyHud Release Pre-Flight
@@ -104,7 +104,7 @@ If the release changed any **badge / HUD / status-widget visuals**, also run
 **`.claude/skills/dst-badge-visual-audit/SKILL.md`** for visual-parity bugs (wrong build/tint/scale,
 draw order, fill direction, layout/wrap, collision with vanilla HUD widgets).
 
-## 4. Version-bump check
+## 4. Version-bump + docs / Workshop-description sync
 
 Read `modinfo.lua` and confirm the version field. Current format (single line, double-quoted, no
 leading `v`):
@@ -120,6 +120,31 @@ Verify all three line up:
 
 **Steam Workshop REJECTS an upload that reuses an existing version**, so a stale `modinfo.lua` version
 is a real ship-blocker — bump it *before* tagging, not after.
+
+### Docs / Workshop-description sync (`README.md`)
+
+`README.md` is the single file that carries the user-facing version story, in **three** places that
+must ALL gain a new entry for the release — it's easy to bump `modinfo` and forget these:
+
+1. The **markdown changelog** (the `### New in 2026.N — …` sections under "What's new in 2026").
+2. The **English Steam Workshop BBCode** block (the `[b]New in 2026.N — …[/b]` `[list]`).
+3. The **繁體中文 Workshop BBCode** block (the `[b]2026.N 新增 —— …[/b]` `[list]`).
+
+For the release, verify each one:
+- A new `2026.N` changelog entry exists in **all three** (markdown + both BBCode), describing the
+  *user-facing* changes only (skip internal refactors / test harnesses). Match the established voice;
+  the zh-TW block is a translation of the English, not a copy.
+- **If the release added or changed any `modinfo.lua` config option**, the **Settings lists** in all
+  three places (the markdown `## Settings` list + the two `[b]Settings…[/b]` / `[b]設定…[/b]` `[list]`s)
+  must gain/adjust the matching line. This is the step most often missed — a feature ships with a new
+  option but the README's option list still stops at the previous version.
+- The Workshop **description shown on the public item is pasted by hand from these BBCode blocks**, so a
+  stale README means the user pastes a stale description at the gate-7 public upload. Update it here,
+  before tagging, so the BBCode is current when they upload.
+
+`README.md` is **not** in `release-manifest.txt` (docs are excluded), so it does **not** ship in the
+archive and a README-only fix needs **no re-tag** — but do it as part of this gate so it lands on
+`master` before the public upload, not as an afterthought.
 
 ## 5. In-engine load-smoke (critical on modmain / require changes)
 
