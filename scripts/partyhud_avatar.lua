@@ -190,9 +190,13 @@ end
 -- absolute top-left inset, NOT derived from the scoreboard y_offset: the corner head just needs to sit
 -- inside the ring's top-left, so we take only the raw base_scale (shrunk by corner_fit) and place it at
 -- (corner_x, corner_y). Returns scale, x, y. nil base_scale -> 0; nil fit/x/y -> the module constants.
-M.AVATAR_HEAD_CORNER_FIT = 0.35
+M.AVATAR_HEAD_CORNER_FIT = 0.4
 M.AVATAR_HEAD_CORNER_X = -20
-M.AVATAR_HEAD_CORNER_Y = 18
+-- Y=0 (low in the top-left, NOT level with the flat fallback's AVATAR_CORNER_Y=18): the animated head's
+-- anchor is at the neck and the sprite extends upward, so a higher Y would push the head into the player
+-- name above the badge. Tuned in-engine 2026-06-20. The flat-fallback image keeps its own 18 (it is a
+-- small centred icon that does not overshoot upward).
+M.AVATAR_HEAD_CORNER_Y = 0
 
 function M.avatar_head_corner_geom(base_scale, corner_fit, corner_x, corner_y)
   base_scale = base_scale or 0

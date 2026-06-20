@@ -278,12 +278,12 @@ end)
 describe("partyhud_avatar — avatar_head_corner_geom", function()
   -- Corner preset for the animated head: shrink the raw GetPlayerBadgeData scale by corner_fit and
   -- place the head at an absolute (corner_x, corner_y) top-left inset (NOT derived from the scoreboard
-  -- y_offset, unlike the centre geom). Defaults: FIT 0.35, X -20, Y 18.
+  -- y_offset, unlike the centre geom). Defaults: FIT 0.4, X -20, Y 0 (low so the head clears the name).
   it("defaults are applied when fit/x/y are nil", function()
     local s, x, y = M.avatar_head_corner_geom(0.23)
-    assert.is_true(near(s, 0.23 * 0.35)) -- 0.0805
+    assert.is_true(near(s, 0.23 * 0.4)) -- 0.092
     assert.is_true(near(x, -20))
-    assert.is_true(near(y, 18))
+    assert.is_true(near(y, 0))
   end)
   it("explicit fit/x/y override the defaults", function()
     local s, x, y = M.avatar_head_corner_geom(0.23, 0.4, -15, 22)
