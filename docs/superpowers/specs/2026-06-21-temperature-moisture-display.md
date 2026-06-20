@@ -52,23 +52,27 @@ values:
 ## 2. Sub-rings — four around the main HP ring (on-demand)
 
 The badge already has two sub-rings below the main HP ring: **hunger (bottom-left)** and **sanity
-(bottom-right)**. Add the two new sub-rings as the **top** pair, so all four **surround** the main HP
-ring at its four diagonals:
+(bottom-right)**. Add the two new sub-rings **hugging the HP ring's perimeter**, each tucked **closely
+aside its existing neighbour**: moisture just **up-and-left of hunger**, temperature just
+**up-and-right of sanity** — so the four ride the ring's edge as a clustered arc, NOT floating at the
+top of the badge:
 
 ```
-        moisture        temperature
-            \   (HP ring)   /
-            /              \
-        hunger             sanity
+   moisture                    temperature
+       \  ·  (  HP ring  )  ·  /
+   hunger ·                · sanity
 ```
 
-- **Moisture** sub-ring: **top-LEFT** (above hunger), blue. Appears when `moisture_popup` is true.
-- **Temperature** sub-ring: **top-RIGHT** (above sanity), **cold = cyan / hot = red-orange**. Appears
-  when `temp_popup` is true.
+- **Moisture** sub-ring: **closely aside the top-left of hunger**, hugging the HP ring edge, blue.
+  Appears when `moisture_popup` is true.
+- **Temperature** sub-ring: **closely aside the top-right of sanity**, hugging the HP ring edge,
+  **cold = cyan / hot = red-orange**. Appears when `temp_popup` is true.
 - Both are the same small `SUB_SCALE` ring style as hunger/sanity (a `Badge(nil, …, build, …)` like the
-  existing sub-rings). Positions mirror hunger/sanity upward: moisture at roughly `(-SUB_X, +SUB_Y_top)`,
-  temp at `(+SUB_X, +SUB_Y_top)` — exact offsets tuned in-engine (must clear the name label above and
-  the corner avatar).
+  existing sub-rings). The intent is each new ring sits **adjacent to its neighbour along the ring's
+  curve** (a short arc up from hunger / sanity), not a vertical mirror at the badge top: moisture near
+  hunger's upper-left, temp near sanity's upper-right. Exact offsets tuned in-engine — keep them tucked
+  against the HP ring (so the four read as one cluster) while clearing the name label above and the
+  corner avatar.
 - **On-demand**: shown only when their popup predicate is true; hidden otherwise (like the vanilla
   `moisturemeter` / the thermal arrow). Each carries a small **rate arrow** (reuse the sanity-rate
   arrow mechanism) when its rate descriptor is non-steady.
