@@ -1,6 +1,6 @@
 ---
 name: partyhud-release-preflight
-description: Shipping pre-flight checklist to run BEFORE tagging or publishing a new PartyHud release. Use this WHENEVER the user moves to ship / release / cut / roll out / tag / publish a new PartyHud version — phrasings like "ship v2026.X", "let's tag", "cut a release", "roll out a new release", "publish to Workshop", "push the new version", "release PartyHud", or any step toward creating a vYYYY.N tag — even if they never say "pre-flight" or "checklist". The #1 job is the production-accident guard: the release archive is built from an allowlist (release-manifest.txt), so a runtime-required Lua module left out of the allowlist ships a mod that fails to load in a live game. The checklist confirms the allowlist, runs the crash-safety audit + static gates (luacheck, the busted unit suite incl. the layout-snapshot golden baseline, StyLua), verifies the version bump, syncs the README changelog + both (English / 繁中) Workshop BBCode descriptions + the Settings lists for the new version, reminds about an in-engine load-smoke, THEN tags. Trigger on any release/ship/tag intent; under-triggering is the failure mode.
+description: Shipping pre-flight checklist to run BEFORE tagging or publishing a new PartyHud release. Use this WHENEVER the user moves to ship / release / cut / roll out / tag / publish a new PartyHud version — phrasings like "ship v2026.X", "let's tag", "cut a release", "roll out a new release", "publish to Workshop", "push the new version", "release PartyHud", or any step toward creating a vYYYY.N tag — even if they never say "pre-flight" or "checklist". The #1 job is the production-accident guard: the release archive is built from an allowlist (release-manifest.txt), so a runtime-required Lua module left out of the allowlist ships a mod that fails to load in a live game. The checklist confirms the allowlist, runs the crash-safety audit + static gates (luacheck, the busted unit suite incl. the layout-snapshot golden baseline, StyLua), checks the DST dependency-surface is still current (the dst-game-update-compat skill — catches a game update breaking the mod), verifies the version bump, syncs the README changelog + both (English / 繁中) Workshop BBCode descriptions + the Settings lists for the new version, reminds about an in-engine load-smoke, THEN tags. Trigger on any release/ship/tag intent; under-triggering is the failure mode.
 ---
 
 # PartyHud Release Pre-Flight
@@ -14,7 +14,7 @@ the manifest, passes every static gate (luacheck/busted run on the source tree, 
 gets tagged, ships — and the mod **fails to load in a live game** because `require` hits a file that
 isn't in the zip. luacheck and busted cannot catch this; only the manifest gate can.
 
-Run gates 1–5 in order before tagging. Each gate explains *why* so you can judge edge cases instead
+Run gates 1–6 in order before tagging. Each gate explains *why* so you can judge edge cases instead
 of rubber-stamping. Stop and surface to the user on any hard failure.
 
 ## 0. Preconditions
@@ -90,8 +90,8 @@ nothing about what's in the archive (that's gate 1's job).
 - **What these gates do NOT cover:** only the PURE logic above is unit-tested. The engine-bound widget /
   `modmain` behaviour — the real `MoveToFront` draw order, the centre↔corner head swap, the netvar
   broadcast + heartbeat, the actual rendering — has no headless test (there is no headless DST client;
-  see memory `dst-headless-testing-research`). That half is what gate 5's in-engine smoke verifies, and
-  why gate 5 is not optional for HUD/widget releases.
+  see memory `dst-headless-testing-research`). That half is what gate 6's in-engine smoke verifies, and
+  why gate 6 is not optional for HUD/widget releases.
 
 ## 3. Crash-safety audit
 
@@ -104,7 +104,30 @@ If the release changed any **badge / HUD / status-widget visuals**, also run
 **`.claude/skills/dst-badge-visual-audit/SKILL.md`** for visual-parity bugs (wrong build/tint/scale,
 draw order, fill direction, layout/wrap, collision with vanilla HUD widgets).
 
-## 4. Version-bump + docs / Workshop-description sync
+## 4. DST dependency-surface freshness — catch a GAME update breaking the mod
+
+Klei patches DST regularly, and a game-side change — a renamed build (the original PartyHUD died when
+`health` became `status_health`), a changed component API/threshold, a `GetClientTable` field rename,
+an event/tag rename, a `TUNING` value change — can break the mod while every static gate above still
+passes (they run on OUR source, not the game). The crash/visual audits review our diff; none of them
+tracks DST drifting underneath us. So before shipping, confirm the **dependency surface is current** by
+invoking the repo skill **`.claude/skills/dst-game-update-compat/SKILL.md`** — two checks:
+
+- **Did DST patch since the last compat-verify?** Refresh the local `dst-scripts` checkout
+  (`/home/iblis/code/dst/dst-scripts/scripts`) to the new game build and run each row's **Verify** check
+  in `references/dependency-surface.md` against it (work section by section; the highest-risk sections
+  are status-components and badge-widgets/builds — the build-rename class). A mismatch = a likely break:
+  fix the mod and update the row. If DST has NOT patched since the last verify, this is a quick no-op.
+- **Did THIS release add a new engine dependency?** A feature that touches a new DST API / component
+  field / build / event / netvar / TUNING must ship WITH its new row(s) in
+  `references/dependency-surface.md` (symbol · where-used · assumption · ground-truth · break-risk ·
+  verify). Skim `git diff v<latest>..HEAD` for new `GLOBAL.` / component / build / event touchpoints to
+  see what to add. A shipped dependency with no surface row is a future silent break the next DST update
+  will not be checked against.
+
+This is the static half; gate 6's in-engine smoke exercises the changed surface in a live game.
+
+## 5. Version-bump + docs / Workshop-description sync
 
 Read `modinfo.lua` and confirm the version field. Current format (single line, double-quoted, no
 leading `v`):
@@ -146,7 +169,7 @@ For the release, verify each one:
 archive and a README-only fix needs **no re-tag** — but do it as part of this gate so it lands on
 `master` before the public upload, not as an afterthought.
 
-## 5. In-engine load-smoke (critical on modmain / require changes)
+## 6. In-engine load-smoke (critical on modmain / require changes)
 
 A bare no-player load-smoke is **not enough** to clear tick-code changes. The server runs with
 `pause_when_empty=true`, which freezes `DoPeriodicTask`/`OnUpdate` until a player connects — so a
@@ -171,9 +194,9 @@ the static gates can't see (the pure decisions are tested; the widget applicatio
 > per-tick broadcast, the event hooks, or added/changed a `require`d module MUST get this smoke with a
 > player connected (or `pause_when_empty=false`) — that is the only way a latent tick-path crash surfaces.
 
-## 6. Tag — and what the tag triggers
+## 7. Tag — and what the tag triggers
 
-Only after gates 1–5 pass. Create and push the **annotated** tag `vYYYY.N`:
+Only after gates 1–6 pass. Create and push the **annotated** tag `vYYYY.N`:
 
 ```bash
 git tag -a v2026.11 -m "PartyHud v2026.11"
@@ -188,7 +211,7 @@ creates a GitHub Release with both assets attached.
 > `git push origin <tag>` reach GitHub. The hub fork `~/partyhud-fork` (SSH key) + bundle/`git am` remains
 > a fallback only if direct push ever fails. See memory `partyhud-2026-mod`.
 
-## 7. Downstream (after the tag/CI — pointer only)
+## 8. Downstream (after the tag/CI — pointer only)
 
 Out of this checklist's core scope, but the next steps are: download the GitHub Release artifact,
 upload to the **PUBLIC** Workshop item `3744675705` (the user does the Steam login), then sync prod.
