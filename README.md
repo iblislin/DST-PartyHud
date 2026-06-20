@@ -46,7 +46,7 @@ A modernized fork of [PartyHUD](https://github.com/brianchenito/PartyHud) by **b
 - New per-player option **Low-HP Alert: Off / 40% / 25% / 15%** (percent of their max HP; default 25%).
 - The pulse **coexists with the fire/overheat/freeze warning** (different element, so a burning low-HP teammate shows both), and it works on **far / cross-shard** badges too — the teammate you can't see is exactly the one you most need flagged.
 
-### New in 2026.11 — teammate avatars + name colours
+### New in 2026.12 — teammate avatars + name colours
 - Each badge can now show the teammate's **character avatar**: a small head in the **Corner**, or the animated character **face centred** in the HP ring (the HP number becomes hover-only so the face is unobstructed). The avatar **reflects each player's chosen character skin**, and far / cross-shard teammates show theirs too.
 - New per-player option **Teammate avatar: Off / Corner / Centred head** (default Centred head). In the centred style, a teammate's badge briefly **flips to the corner** while their fire / overheat / freeze / HP-rate arrow is active, so the arrow is never hidden behind the face.
 - New per-player option **Colour Teammate Names** — tint each name in that player's own colour (default on).
@@ -151,7 +151,7 @@ to work on current Don't Starve Together builds.
     badges too
 [/list]
 
-[b]New in 2026.11 — teammate avatars + name colours[/b]
+[b]New in 2026.12 — teammate avatars + name colours[/b]
 [list]
 [*] Each badge can show the teammate's character avatar: a small head in the Corner, or the animated
     character face Centred in the HP ring (the HP number becomes hover-only). The avatar reflects each
@@ -256,7 +256,7 @@ Thanks for the original work!
 [*] 與著火/過熱/失溫警示並存(不同元件,所以又低血又著火會同時顯示),遠距 / 跨-shard 徽章也會脈動
 [/list]
 
-[b]2026.11 新增 —— 隊友頭像與名字配色[/b]
+[b]2026.12 新增 —— 隊友頭像與名字配色[/b]
 [list]
 [*] 每個徽章可顯示隊友的角色頭像:角落的小頭像,或在 HP 環中央的動畫角色臉(HP 數字改為滑鼠移上才顯示,
     讓臉不被遮住)。頭像會反映每位玩家所選的角色造型(skin),遠距 / 跨-shard 的隊友也會顯示其造型
