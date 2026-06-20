@@ -1,8 +1,10 @@
 -- busted config for CI (dstmodders/action or `busted spec/`).
 -- The spec files require modules from scripts/ — lpath makes `require("partyhud_statuscodec")` resolve.
+-- spec/?.lua resolves the test-only helpers (require("support.roster") etc. in layout_snapshot_spec),
+-- matching spec/run_local.lua's package.path so CI busted and the local shim load the same files.
 return {
 	default = {
-		lpath = "scripts/?.lua;./?.lua",
+		lpath = "scripts/?.lua;spec/?.lua;./?.lua",
 		pattern = "_spec",
 		ROOT = { "spec" },
 	},
