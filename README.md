@@ -46,6 +46,12 @@ A modernized fork of [PartyHUD](https://github.com/brianchenito/PartyHud) by **b
 - New per-player option **Low-HP Alert: Off / 40% / 25% / 15%** (percent of their max HP; default 25%).
 - The pulse **coexists with the fire/overheat/freeze warning** (different element, so a burning low-HP teammate shows both), and it works on **far / cross-shard** badges too — the teammate you can't see is exactly the one you most need flagged.
 
+### New in 2026.11 — teammate avatars + name colours
+- Each badge can now show the teammate's **character avatar**: a small head in the **Corner**, or the animated character **face centred** in the HP ring (the HP number becomes hover-only so the face is unobstructed). The avatar **reflects each player's chosen character skin**, and far / cross-shard teammates show theirs too.
+- New per-player option **Teammate avatar: Off / Corner / Centred head** (default Centred head). In the centred style, a teammate's badge briefly **flips to the corner** while their fire / overheat / freeze / HP-rate arrow is active, so the arrow is never hidden behind the face.
+- New per-player option **Colour Teammate Names** — tint each name in that player's own colour (default on).
+- **Fixed:** a **far / cross-shard teammate's badge could vanish while they sat idle** (a data-staleness false positive); badges now stay put.
+
 ## Install (server mod)
 Subscribe on the Workshop, **or** place this folder into your server's `mods/` as `partyhud` and enable it in each shard's `modoverrides.lua`:
 ```lua
@@ -63,6 +69,8 @@ Connecting players download it automatically. _(If you grab a GitHub source arch
 - **Show Cross-Shard Teammates:** Show / Hide (teammates on the other shard or out of view range; on by default)
 - **HP Number:** Always / On hover
 - **Low-HP Alert:** Off / 40% / 25% / 15% (pulse a teammate's badge border red below this % of their max HP; default 25%)
+- **Teammate avatar:** Off / Corner / Centred head (show each teammate's character on their badge; default Centred head)
+- **Colour Teammate Names:** On / Off (tint each teammate's name in their own player colour; default on)
 - **[Test] Show mock badges:** fills empty slots with fake teammates to preview the layout (only you see it; default off)
 
 ## Credits & License
@@ -143,6 +151,19 @@ to work on current Don't Starve Together builds.
     badges too
 [/list]
 
+[b]New in 2026.11 — teammate avatars + name colours[/b]
+[list]
+[*] Each badge can show the teammate's character avatar: a small head in the Corner, or the animated
+    character face Centred in the HP ring (the HP number becomes hover-only). The avatar reflects each
+    player's chosen character skin, and far / cross-shard teammates show theirs too
+[*] New option Teammate avatar: Off / Corner / Centred head (default Centred head). In the centred style
+    the badge briefly flips to the corner while a fire / overheat / freeze / HP-rate arrow is active, so
+    the arrow is not hidden behind the face
+[*] New option Colour Teammate Names — tint each name in that player's own colour (default on)
+[*] Fixed: a far / cross-shard teammate's badge could vanish while they sat idle (a data-staleness false
+    positive); badges now stay put
+[/list]
+
 [b]Settings (each player picks their own)[/b]
 [list]
 [*] HUD Layout: Horizontal / Vertical
@@ -152,6 +173,8 @@ to work on current Don't Starve Together builds.
 [*] Show Cross-Shard Teammates: Show / Hide (other-shard or out-of-view teammates; on by default)
 [*] HP Number: Always / On hover
 [*] Low-HP Alert: Off / 40% / 25% / 15% (pulse the badge border red below this % of max HP)
+[*] Teammate avatar: Off / Corner / Centred head (show each teammate's character; default Centred head)
+[*] Colour Teammate Names: On / Off (tint each name in that player's own colour; default on)
 [/list]
 
 [b]Note[/b] — this is a server mod: install it on your dedicated server (or enable
@@ -233,6 +256,16 @@ Thanks for the original work!
 [*] 與著火/過熱/失溫警示並存(不同元件,所以又低血又著火會同時顯示),遠距 / 跨-shard 徽章也會脈動
 [/list]
 
+[b]2026.11 新增 —— 隊友頭像與名字配色[/b]
+[list]
+[*] 每個徽章可顯示隊友的角色頭像:角落的小頭像,或在 HP 環中央的動畫角色臉(HP 數字改為滑鼠移上才顯示,
+    讓臉不被遮住)。頭像會反映每位玩家所選的角色造型(skin),遠距 / 跨-shard 的隊友也會顯示其造型
+[*] 新選項 Teammate avatar(隊友頭像):Off / Corner(角落)/ Centred head(置中頭像;預設)。置中樣式下,
+    當隊友出現著火 / 過熱 / 失溫 / HP 速率箭頭時,徽章會暫時翻成角落樣式,讓箭頭不被臉擋住
+[*] 新選項 Colour Teammate Names(隊友名字配色)—— 將每個名字染成該玩家自己的顏色(預設開啟)
+[*] 修正:遠距 / 跨-shard 隊友靜止不動時,其徽章可能消失(資料 staleness 誤判);現在徽章會保持顯示
+[/list]
+
 [b]設定(每位玩家各自選擇)[/b]
 [list]
 [*] HUD Layout(排列):Horizontal(水平)/ Vertical(垂直)
@@ -242,6 +275,8 @@ Thanks for the original work!
 [*] Show Cross-Shard Teammates(顯示跨 shard 隊友):Show / Hide(另一 shard 或超出視野的隊友;預設開啟)
 [*] HP Number(HP 數字):Always(總是)/ On hover(滑鼠移上)
 [*] Low-HP Alert(低 HP 警示):Off / 40% / 25% / 15%(低於最大 HP 此百分比時,徽章邊框紅色脈動)
+[*] Teammate avatar(隊友頭像):Off / Corner(角落)/ Centred head(置中頭像;顯示每位隊友的角色,預設置中頭像)
+[*] Colour Teammate Names(隊友名字配色):On / Off(將每個名字染成該玩家自己的顏色;預設開啟)
 [/list]
 
 [b]注意[/b] —— 這是伺服器端 mod:安裝在你的專用伺服器(或開房時啟用),
