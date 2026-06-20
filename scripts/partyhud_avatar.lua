@@ -178,6 +178,30 @@ function M.avatar_head_geom(base_scale, base_y_offset, fit, y_nudge)
   return base_scale * fit, base_y_offset * fit + y_nudge
 end
 
+-- Whether a classify bucket yields a build the animated head can render. Only "base" / "random"
+-- characters have a resolvable character build (+ skin) on the receiver; "mod" / "unknown_named" /
+-- "unknown" do not (a mod character the receiver lacks, or no character at all), so the widget falls
+-- back to the always-loaded flat avatar atlas for those. Pure boolean; nil -> false.
+function M.head_renderable(classify_result)
+  return classify_result == "base" or classify_result == "random"
+end
+
+-- Corner preset for the animated head. Unlike avatar_head_geom (centre), the corner position is an
+-- absolute top-left inset, NOT derived from the scoreboard y_offset: the corner head just needs to sit
+-- inside the ring's top-left, so we take only the raw base_scale (shrunk by corner_fit) and place it at
+-- (corner_x, corner_y). Returns scale, x, y. nil base_scale -> 0; nil fit/x/y -> the module constants.
+M.AVATAR_HEAD_CORNER_FIT = 0.35
+M.AVATAR_HEAD_CORNER_X = -20
+M.AVATAR_HEAD_CORNER_Y = 18
+
+function M.avatar_head_corner_geom(base_scale, corner_fit, corner_x, corner_y)
+  base_scale = base_scale or 0
+  corner_fit = corner_fit or M.AVATAR_HEAD_CORNER_FIT
+  corner_x = corner_x or M.AVATAR_HEAD_CORNER_X
+  corner_y = corner_y or M.AVATAR_HEAD_CORNER_Y
+  return base_scale * corner_fit, corner_x, corner_y
+end
+
 -- DEFAULT_PLAYER_COLOUR (constants.lua:1765) = RGB(153,153,153) = {0.6,0.6,0.6} GREY. Used when the
 -- player colour is not yet known. Kept as a module constant so the widget + specs agree on it without
 -- depending on the engine global.

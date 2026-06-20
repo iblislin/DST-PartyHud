@@ -252,6 +252,53 @@ describe("partyhud_avatar — avatar_head_geom", function()
   end)
 end)
 
+describe("partyhud_avatar — head_renderable", function()
+  -- The animated head can only be built/skinned for a real character build; mod/unknown prefabs
+  -- have no resolvable build on the receiver, so the widget falls back to the flat atlas image.
+  it("base character -> true", function()
+    assert.is_true(M.head_renderable("base"))
+  end)
+  it("'random' -> true (rendered like a real character)", function()
+    assert.is_true(M.head_renderable("random"))
+  end)
+  it("mod character -> false (flat-atlas fallback)", function()
+    assert.is_false(M.head_renderable("mod"))
+  end)
+  it("unknown_named -> false", function()
+    assert.is_false(M.head_renderable("unknown_named"))
+  end)
+  it("unknown -> false", function()
+    assert.is_false(M.head_renderable("unknown"))
+  end)
+  it("nil -> false", function()
+    assert.is_false(M.head_renderable(nil))
+  end)
+end)
+
+describe("partyhud_avatar — avatar_head_corner_geom", function()
+  -- Corner preset for the animated head: shrink the raw GetPlayerBadgeData scale by corner_fit and
+  -- place the head at an absolute (corner_x, corner_y) top-left inset (NOT derived from the scoreboard
+  -- y_offset, unlike the centre geom). Defaults: FIT 0.35, X -20, Y 18.
+  it("defaults are applied when fit/x/y are nil", function()
+    local s, x, y = M.avatar_head_corner_geom(0.23)
+    assert.is_true(near(s, 0.23 * 0.35)) -- 0.0805
+    assert.is_true(near(x, -20))
+    assert.is_true(near(y, 18))
+  end)
+  it("explicit fit/x/y override the defaults", function()
+    local s, x, y = M.avatar_head_corner_geom(0.23, 0.4, -15, 22)
+    assert.is_true(near(s, 0.23 * 0.4)) -- 0.092
+    assert.is_true(near(x, -15))
+    assert.is_true(near(y, 22))
+  end)
+  it("nil base_scale -> scale 0, position still applied", function()
+    local s, x, y = M.avatar_head_corner_geom(nil, 0.4, -15, 22)
+    assert.is_true(near(s, 0))
+    assert.is_true(near(x, -15))
+    assert.is_true(near(y, 22))
+  end)
+end)
+
 describe("partyhud_avatar — name_colour", function()
   -- DEFAULT_PLAYER_COLOUR (constants.lua:1765) = RGB(153,153,153) = {0.6,0.6,0.6} GREY
   it("local player colour -> {r,g,b,1} (full opacity)", function()
