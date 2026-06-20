@@ -119,7 +119,7 @@ configuration_options = {
       { description = "Corner", data = 1 },
       { description = "Centred head", data = 2 },
     },
-    default = 1,
+    default = 2,
     client = true,
   },
   {
