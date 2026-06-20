@@ -286,21 +286,28 @@ end
 -- refresh from UpdateBadges.
 --   prefab    : character prefab string (local v.prefab, or the GetClientTable record prefab); nil -> unknown
 --   idflags   : packed ghost + character-state bits (avatarmath.packidflags / a raw userflags int)
---   is_foreign: dims to FOREIGN_ALPHA (data ~1s stale), matching the rest of the badge
+--   is_foreign: kept for the _last_avatar_args cache (re-passed on the thermal re-render); it no longer
+--               dims the avatar -- see the alpha note below.
 --   base_skin : the player's character skin id (GetClientTable().base_skin), e.g. "wilson_formal";
 --               nil/"" -> the plain prefab.."_none" head. Reflected in BOTH centre and corner styles.
 -- A renderable character (classify base/random) uses the animated head at the active style's geometry;
 -- a non-renderable one (mod/unknown) uses the flat atlas image (crash-proof always-loaded fallback) at
 -- the active style's geometry. SetAvatar is a no-op when style == "off". Children are created lazily so
 -- an "off" badge pays nothing. identity_changed (which already compares base_skin) gates the texture/anim
--- rebuild; alpha is always re-asserted (foreign flip is cheap).
+-- rebuild; alpha is always re-asserted.
 function PartyBadge:SetAvatar(prefab, idflags, is_foreign, base_skin)
   self._last_avatar_args = { prefab = prefab, idflags = idflags, is_foreign = is_foreign, base_skin = base_skin }
   if self.avatar_style == "off" then
     self:_HideAvatars()
     return
   end
-  local a = (is_foreign and FOREIGN_ALPHA) or FULL_ALPHA
+  -- Avatar alpha is ALWAYS full, even for far / cross-shard teammates. The avatar is reliable cluster-wide
+  -- IDENTITY (prefab + skin from GetClientTable), not the ~1s-stale STATUS broadcast, so it does not carry
+  -- staleness to signal. And dimming a multi-layer animated head (worse with a skinned build) makes its
+  -- overlapping symbols double-blend through each other -> the face looks broken. The ring + name still
+  -- dim (SetForeign / name_colour) to signal "far/stale"; the face stays crisp so you can still recognise
+  -- who it is. (is_foreign is no longer read here.)
+  local a = FULL_ALPHA
   local new_identity = { prefab = prefab, idflags = idflags or 0, base_skin = base_skin }
   local changed = avatarmath.identity_changed(self._avatar_identity, new_identity)
   local style = self.avatar_style
