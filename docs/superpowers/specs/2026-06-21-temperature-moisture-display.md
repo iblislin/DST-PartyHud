@@ -79,6 +79,19 @@ top of the badge:
 - **Hover** a sub-ring shows its number (existing per-ring hover behaviour); the consolidated panel
   (§3) shows all at once.
 
+**Visuals (researched 2026-06-21 — reuse vanilla art where it exists):**
+- **Moisture**: reuse the vanilla `moisturemeter` look — a `status_meter`-bank ring fill, the water-drop
+  via `OverrideSymbol("icon", "status_wet", "icon")`, blue tint `(48,97,169)/255`, and the `sanity_arrow`
+  build for the rate arrow (anims `arrow_loop_increase[_more/_most]` = wetting / `…_decrease[…]` = drying
+  / `neutral` = steady; all already in the HUD asset set, same arrow the sanity sub-ring uses).
+- **Temperature**: no vanilla player meter exists, so design it as the same small ring tinted
+  **cold = cyan / hot = red-orange** (`SetMultColour`), with the purpose-built **`temperature_meter`**
+  build for the icon (already in the HUD asset bundle, driven `SetPercent("idle", pct)` cold→hot) + the
+  same `sanity_arrow` rate arrow. Reads hot/cold by colour at a glance.
+- **Unit**: the temperature number is a plain `N°` (no C/F suffix) — DST's value is an internal thermal
+  scale with no real-world unit and vanilla shows no temperature number anywhere; a °C/°F toggle is a
+  mod convention we intentionally skip.
+
 **Config:** two new per-player options, each `On-demand / Off` (default **On-demand** — this is the
 release's headline). `Off` hides that sub-ring entirely (and the broadcast can still run; the client
 just doesn't render it).
@@ -116,10 +129,20 @@ thermal flags are forced-neutral for far players as today).
 - **Hide-HUD toggle** — a keybind to hide/show the whole party HUD. Same rebindable-config-spinner
   pattern, default **`KEY_H`** (free by default), with **None** to disable.
 - **Name font size** — a per-player config: **Small / Medium / Large**. The name `Text` widget's
-  hard-coded `SetSize(20)` becomes the chosen size. Note: a larger name needs the badge's vertical
-  reservation to account for it so it does not overlap the row above — but with the four-around-the-ring
-  sub-ring layout the name still sits above the badge as today, so this is a contained tweak; the
-  cross-shard "elsewhere" label (`SetForeign`'s soft-blue label) should use the same size.
+  hard-coded `SetSize(20)` becomes the chosen size. **Layout impact (per review):** in the VERTICAL
+  layout a larger name needs MORE per-badge vertical reservation — feed `name_size` into
+  `compute_badge_positions`' vertical step so a big name does not overlap the badge above; the
+  HORIZONTAL layout (a single row) is unaffected. So unlike the sub-rings, `name_size` DOES move the
+  layout: the layout-snapshot goldens must be re-blessed per size and the spacing tuned in-engine. The
+  cross-shard "elsewhere" label (`SetForeign`'s soft-blue label) uses the same size.
+
+**Keybind collision is NOT fatal (researched 2026-06-21).** DST stores key handlers in a set and
+dispatches EVERY handler registered on a key (`EventProcessor:HandleEvent` iterates all via `pairs()`,
+return values discarded — `events.lua:42-49` / `input.lua:186-193`), so two mods bound to the same key
+both fire (a double action) — never a crash, no winner. There is no Klei collision API; the community
+standard — which this release follows — is the rebindable config spinner above PLUS a **`None`
+(`data = -1`) option** and a registration guard (`if key ~= -1 then TheInput:AddKeyDownHandler(key, fn) end`),
+so a user who hits a conflict can re-pick a free key or disable the bind.
 
 DST key facts (researched 2026-06-21 vs dst-scripts): occupied default single keys are
 WASD / Q / E / F / I / M / Y / U / Tab / backtick / Backspace / Esc / Enter / Space / 1-0 / `/`. Free
@@ -158,8 +181,9 @@ the `dst-game-update-compat` dependency surface.)
 - `modinfo.lua`: new config options — `show_temperature` (On-demand/Off), `show_moisture`
   (On-demand/Off), `key_compact` (KEY spinner + None, default O), `key_hide_hud` (KEY spinner + None,
   default H), `name_size` (Small/Medium/Large).
-- `spec/*`: specs for `temp_popup` / `moisture_popup` / codec v3 / record fields; layout-snapshot goldens
-  re-confirmed unchanged.
+- `spec/*`: specs for `temp_popup` / `moisture_popup` / codec v3 / record fields. Layout-snapshot:
+  UNCHANGED by the sub-rings (intra-badge geometry), but `name_size` adds a vertical-step input to
+  `compute_badge_positions` → re-bless the goldens for the larger name sizes.
 - `.claude/skills/dst-game-update-compat/references/dependency-surface.md`: **add rows** for the new
   dependencies (see §8).
 
@@ -168,14 +192,17 @@ the `dst-game-update-compat` dependency surface.)
 ## 7. Testing & verification
 
 - **Unit (busted):** `temp_popup`, `moisture_popup`, codec v3 round-trip + backward-tolerant v2 decode,
-  record normalize of the new fields. Layout-snapshot goldens must stay green (no badge-position change).
+  record normalize of the new fields; `compute_badge_positions` with a `name_size` input (the vertical
+  step grows for larger names). Layout-snapshot goldens: unchanged by the sub-rings; re-blessed for the
+  `name_size` vertical sizes.
 - **In-engine (modtest, 2-player + 2-shard — the crash-prone surface):**
   1. Temperature sub-ring appears when a teammate enters the danger band (use `dst-thermal cold`/`hot`)
      and when temp changes fast; cold = cyan / hot = red; hides in the comfortable band.
   2. Moisture sub-ring appears when a teammate is wet (rain / `ms_forceprecipitation`) and hides when dry.
   3. Hover detail panel shows HP/hunger/sanity/temp°/moisture% + flags together.
   4. Compact/detail toggle (`O`) flips all badges; hide-HUD (`H`) toggles the whole HUD; both rebind via
-     the mod config; `name_size` changes the name without breaking layout.
+     the mod config; `name_size` changes the name AND the VERTICAL-layout spacing grows to fit
+     (horizontal unaffected) — eyeball that large names don't overlap the badge above.
   5. Cross-shard: a teammate on the other shard reflects temp/moisture (codec v3); a v2 (old) peer
      degrades gracefully (sub-rings off, no crash).
   6. Crash-safety audit (`dst-mod-crash-audit`) of the diff + visual audit (`dst-badge-visual-audit`)
@@ -194,7 +221,14 @@ This release adds new DST engine dependencies — **add their rows to
 Each row carries its dst-scripts ground-truth + a verify check, per the surface format. Running the
 preflight gate 4 on this release is the skill's first real exercise.
 
-## 9. Out of scope
+## 9. Ship note (downstream)
+
+At v2026.13 publish, **make a simple Workshop image that teaches the hotkeys** (the compact/detail
+toggle + hide-HUD keys, defaults O / H, with a note that they are rebindable in the mod config) and add
+it to the public Workshop page so players discover the keybinds. (The keybinds are otherwise invisible —
+there is no in-HUD hint.) Reminder to surface this at the gate-7 public-upload step.
+
+## 10. Out of scope
 
 - Per-character special-status bars (Tier 4 / FEATURE-IDEAS §5) — not this release.
 - Boat-hull HP, equipment peek, AFK indicator, distance/direction, click→ping — backlog.
