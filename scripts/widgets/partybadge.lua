@@ -370,6 +370,10 @@ function PartyBadge:_RenderAvatarHead(prefab, idflags, base_skin, a, changed, st
     -- geometry per style: centre shrinks scale + scoreboard y_offset to fit the ring; corner shrinks
     -- scale + places the head at an absolute top-left inset. Re-read the class overrides each rebuild so
     -- a console tuner change is picked up (this block runs when _avatar_identity was cleared -> changed).
+    -- INVARIANT: geometry lives inside `changed` because a style flip (centre<->corner) always arrives
+    -- with changed=true -- _apply_effective_style nils _avatar_identity before re-rendering, so the head
+    -- is always re-laid-out at the new style. If a future style change path skips that nil, move the
+    -- geometry out of `changed` instead.
     if style == "corner" then
       local s, x, y = avatarmath.avatar_head_corner_geom(
         scale,
