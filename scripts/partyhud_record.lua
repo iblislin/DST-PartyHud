@@ -43,6 +43,10 @@ function M.normalize_local(raw)
     freezing = raw.freezing,
     sanityrate = raw.sanityrate,
     isdead = raw.isdead,
+    temp = raw.temp,
+    temp_rate = raw.temp_rate or 0,
+    moisture = raw.moisture or 0,
+    moisture_rate = raw.moisture_rate or 0,
   }
 end
 
@@ -74,6 +78,10 @@ function M.normalize_foreign(rec, flags)
     freezing = false,
     sanityrate = 0,
     isdead = flags.dead,
+    temp = rec.temp,
+    temp_rate = rec.temp_rate or 0,
+    moisture = rec.moisture or 0,
+    moisture_rate = rec.moisture_rate or 0,
   }
 end
 
