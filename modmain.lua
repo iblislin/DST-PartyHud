@@ -57,6 +57,10 @@ local low_hp_threshold = (GetModConfigData("low_hp_alert", true) or 0) / 100 -- 
 -- (resolved to "off"/"corner"/"centre" by avatarmath). name_colour: ~=0 = On (default On).
 local avatar_style_cfg = GetModConfigData("avatar_style", true)
 local name_colour_on = (GetModConfigData("name_colour", true) ~= 0)
+-- v2026.13 temp/moisture sub-ring + name-size (client-render-only). ~=0 default-on for temp/moisture.
+local show_temperature = (GetModConfigData("show_temperature", true) ~= 0)
+local show_moisture = (GetModConfigData("show_moisture", true) ~= 0)
+local name_size = GetModConfigData("name_size", true) or "medium"
 -- [vertical layout tunables] edit these then restart client; only used when layout=Vertical
 local VERT_X = 0 -- horizontal pos (more negative = further left)
 local VERT_Y = -130 -- y of the FIRST (top) badge; lower number = lower on screen
@@ -137,6 +141,31 @@ local get_client_foreign_records -- forward decl; assigned where the client stor
 local FOREIGN_STALE_SECS = 5
 local last_foreign_blob_time = 0 -- GetTime() of the last carrier-dirty update; 0 = none yet
 local _foreign_stale_logged = false -- log-once when we start hiding stale foreign badges
+
+-- v2026.13 temperature + moisture broadcast. Per-player netvars carry temp (a net_byte with a +20
+-- offset so the -20..90 internal range fits 0..255) + moisture (0..100 byte) + their rate buckets
+-- (net_tinybyte: 0 steady / 1 rising / 2 falling). The widget receives SIGNED values (modmain
+-- converts the bucket back to -1/0/1), matching the busted-tested status.temp_popup signature.
+local TEMP_NETVAR_OFFSET = 20
+local TEMP_RATE_DELTA = 1 -- per-0.5s-tick |delta| to count as warming/cooling; provisional, tuned in-engine
+local MOISTURE_RATE_DELTA = 1 -- ditto for moisture; provisional
+local function clamp_byte(n)
+  if n < 0 then
+    return 0
+  elseif n > 255 then
+    return 255
+  end
+  return n
+end
+-- netvar rate bucket (0 steady / 1 rising / 2 falling) -> signed -1/0/1 for the widget + codec record.
+local function rate_signed(bucket)
+  return (bucket == 1 and 1) or (bucket == 2 and -1) or 0
+end
+-- v2026.13 client-only HUD toggles, flipped by the rebindable keybinds (PartyHud_ToggleCompact /
+-- PartyHud_ToggleHidden). Declared here so UpdateBadges (defined in onstatusdisplaysconstruct below)
+-- captures them as upvalues; the toggle globals defined later reassign them (same upvalue, seen here).
+local partyhud_compact = false
+local partyhud_hidden = false
 
 -- ============================================================================================
 -- v2026.11 SERVER-SIDE CRASH GUARD (design: docs/superpowers/specs/2026-06-19-crash-guard-design.md)
@@ -450,6 +479,41 @@ GLOBAL.PartyHud_AvatarHeadCornerFit = function(fit, x, y)
 end
 -- luacheck: pop
 
+-- v2026.13 [keybind/console] flip every teammate badge between compact (HP ring + name) and full
+-- detail. partyhud_compact is the module-level upvalue UpdateBadges reads to keep the state sticky
+-- across refreshes. Client-only (ThePlayer/HUD nil on a dedicated server -> no-op). Returns the new state.
+-- luacheck: push ignore 122
+GLOBAL.PartyHud_ToggleCompact = function()
+  partyhud_compact = not partyhud_compact
+  local p = _G.ThePlayer
+  local sd = p ~= nil and p.HUD ~= nil and p.HUD.controls ~= nil and p.HUD.controls.status or nil
+  if sd ~= nil and sd.badgearray ~= nil and p.UpdateBadges ~= nil then
+    p.UpdateBadges() -- re-render so each shown badge gets SetCompact(partyhud_compact) + rings reconcile
+  end
+  return partyhud_compact
+end
+-- luacheck: pop
+
+-- v2026.13 [keybind/console] hide/show the whole party HUD. partyhud_hidden gates UpdateBadges (it
+-- clears + early-returns when hidden, so the hide stays sticky). Unhiding re-renders. Client-only.
+-- luacheck: push ignore 122
+GLOBAL.PartyHud_ToggleHidden = function()
+  partyhud_hidden = not partyhud_hidden
+  local p = _G.ThePlayer
+  local sd = p ~= nil and p.HUD ~= nil and p.HUD.controls ~= nil and p.HUD.controls.status or nil
+  if sd ~= nil and sd.badgearray ~= nil then
+    if partyhud_hidden then
+      for _, b in ipairs(sd.badgearray) do
+        b:HideBadge()
+      end
+    elseif p.UpdateBadges ~= nil then
+      p.UpdateBadges()
+    end
+  end
+  return partyhud_hidden
+end
+-- luacheck: pop
+
 --constructor for badge array
 local function onstatusdisplaysconstruct(self)
   self.badgearray = {}
@@ -461,6 +525,8 @@ local function onstatusdisplaysconstruct(self)
     self.badgearray[i].low_hp_threshold = low_hp_threshold -- v2026.9 low-HP alert threshold
     self.badgearray[i]:SetAvatarStyle(avatarmath.resolve_avatar_style(current_avatar_style)) -- v2026.11
     self.badgearray[i]:SetPlayerColour(nil, name_colour_on) -- v2026.11: enable name colouring per config (colour pushed per refresh)
+    self.badgearray[i]:SetThermalEnabled(show_temperature, show_moisture)
+    self.badgearray[i]:SetNameSize(name_size)
   end
 
   -- v2026.8: re-layout on the dynamic state that changes the backpack mode / second-row dodge.
@@ -552,6 +618,17 @@ local function onstatusdisplaysconstruct(self)
   -- trailing slots cleared (no stale departed-player names).
   self.owner.UpdateBadges = function()
     local maxbadges = #self.badgearray
+    -- v2026.13 hide-HUD toggle: when hidden, clear every badge and skip the whole refresh so the
+    -- hide stays sticky across the dirty-event refreshes that would otherwise re-show badges.
+    if partyhud_hidden then
+      for i = 1, maxbadges do
+        local b = self.badgearray[i]
+        if b ~= nil then
+          b:HideBadge()
+        end
+      end
+      return
+    end
     -- when skipping your own badge, at most maxbadges-1 OTHER players can ever show; cap the
     -- DEBUG mock fill to match (real players are never capped -- they can't exceed this anyway).
     local visible_cap = maxbadges - (skip_self and 1 or 0)
@@ -629,6 +706,10 @@ local function onstatusdisplaysconstruct(self)
           overheating = (v.customoverheating ~= nil and v.customoverheating:value()) or false,
           freezing = (v.customfreezing ~= nil and v.customfreezing:value()) or false,
           sanityrate = (v.customsanityrate ~= nil and v.customsanityrate:value()) or 0,
+          temp = (v.customtemp ~= nil and (v.customtemp:value() - TEMP_NETVAR_OFFSET)) or nil,
+          temp_rate = rate_signed((v.customtemprate ~= nil and v.customtemprate:value()) or 0),
+          moisture = (v.custommoisture ~= nil and v.custommoisture:value()) or 0,
+          moisture_rate = rate_signed((v.custommoisturerate ~= nil and v.custommoisturerate:value()) or 0),
         })
         if v.userid ~= nil and v.userid ~= "" then
           local_userids[v.userid] = true
@@ -648,10 +729,12 @@ local function onstatusdisplaysconstruct(self)
         b:SetPercent(n.hpcur, n.maxhp, n.hppenalty)
         b:SetStatus(n.hunger, n.hungermax, n.sanity, n.sanitymax, n.onfire, n.overheating, n.freezing, n.sanitypenalty)
         b:SetSanityRate(n.sanityrate)
+        b:SetThermal(n.temp, n.temp_rate, n.moisture, n.moisture_rate)
         if n.isdead then
           b:ShowDead()
         else
           b:ShowBadge()
+          b:SetCompact(partyhud_compact)
         end
       elseif DEBUG_SHOWALL and i <= visible_cap then
         -- [TEST ONLY] empty seat -> mock placeholder so the full layout stays visible
@@ -669,6 +752,7 @@ local function onstatusdisplaysconstruct(self)
           (i % 3 == 0) and 0.25 or 0
         )
         b:SetSanityRate((i * 5) % 7)
+        b:SetThermal((i % 2 == 0) and 5 or 65, (i % 2 == 0) and -1 or 1, (i % 3 == 0) and 60 or 0, 0)
         b:ShowBadge()
       else
         -- first empty slot marks where foreign players begin; remember it then stop the local pass.
@@ -764,10 +848,12 @@ local function onstatusdisplaysconstruct(self)
             n.sanitypenalty
           )
           b:SetSanityRate(n.sanityrate) -- neutral 0: no rate arrow for far players
+          b:SetThermal(n.temp, n.temp_rate, n.moisture, n.moisture_rate)
           if n.isdead then
             b:ShowDead()
           else
             b:ShowBadge()
+            b:SetCompact(partyhud_compact)
           end
           slot = slot + 1
         end
@@ -931,6 +1017,12 @@ local function customhppostinit(inst)
   inst.customonfire = GLOBAL.net_bool(inst.GUID, "customhpbadge.onfire", "customhpbadgedirty")
   inst.customoverheating = GLOBAL.net_bool(inst.GUID, "customhpbadge.overheating", "customhpbadgedirty")
   inst.customfreezing = GLOBAL.net_bool(inst.GUID, "customhpbadge.freezing", "customhpbadgedirty")
+  -- v2026.13: temperature (+20-offset byte) + moisture (0..100 byte) + their rate buckets
+  -- (net_tinybyte 0 steady / 1 rising / 2 falling). Share customhpbadgedirty so the client refreshes.
+  inst.customtemp = GLOBAL.net_byte(inst.GUID, "customhpbadge.temp", "customhpbadgedirty")
+  inst.customtemprate = GLOBAL.net_tinybyte(inst.GUID, "customhpbadge.temprate", "customhpbadgedirty")
+  inst.custommoisture = GLOBAL.net_byte(inst.GUID, "customhpbadge.moisture", "customhpbadgedirty")
+  inst.custommoisturerate = GLOBAL.net_tinybyte(inst.GUID, "customhpbadge.moisturerate", "customhpbadgedirty")
 
   -- Server (master sim) reacts to health/death and updates the netvars
   if GLOBAL.TheWorld.ismastersim then
@@ -971,6 +1063,14 @@ local function customhppostinit(inst)
       local t = inst.components.temperature:GetCurrent()
       inst.customfreezing:set(t < 0)
       inst.customoverheating:set(t > inst.components.temperature.overheattemp)
+      inst.customtemp:set(clamp_byte(math.floor(t + 0.5) + TEMP_NETVAR_OFFSET)) -- v2026.13 seed
+      inst._phud_prevtemp = t
+    end
+    -- v2026.13: seed moisture so the byte isn't 0 before the first broadcast tick refresh.
+    if inst.GetMoisture ~= nil then
+      local m = inst:GetMoisture() or 0
+      inst.custommoisture:set(clamp_byte(math.floor(m + 0.5)))
+      inst._phud_prevmoisture = m
     end
   end
 
@@ -1034,6 +1134,29 @@ get_client_foreign_records = function()
   return client_foreign_records
 end
 
+-- v2026.13: server-side (master-sim) per-tick refresh of every local player's temp/moisture netvars.
+-- Called at the TOP of the 0.5s broadcast task (master only), so build_local_records reads fresh values
+-- into the cross-shard record. Rate is bucketed from the per-player previous sample (stored on the inst).
+local function refresh_thermal_netvars()
+  for _, v in ipairs(_G.AllPlayers) do
+    local tc = v.components ~= nil and v.components.temperature or nil
+    if tc ~= nil and v.customtemp ~= nil then
+      local t = tc:GetCurrent()
+      v.customtemp:set(clamp_byte(math.floor(t + 0.5) + TEMP_NETVAR_OFFSET))
+      local d = t - (v._phud_prevtemp or t)
+      v.customtemprate:set((d >= TEMP_RATE_DELTA and 1) or (d <= -TEMP_RATE_DELTA and 2) or 0)
+      v._phud_prevtemp = t
+    end
+    if v.GetMoisture ~= nil and v.custommoisture ~= nil then
+      local m = v:GetMoisture() or 0
+      v.custommoisture:set(clamp_byte(math.floor(m + 0.5)))
+      local dm = m - (v._phud_prevmoisture or m)
+      v.custommoisturerate:set((dm >= MOISTURE_RATE_DELTA and 1) or (dm <= -MOISTURE_RATE_DELTA and 2) or 0)
+      v._phud_prevmoisture = m
+    end
+  end
+end
+
 -- Build the local-player status records the SAME way UpdateBadges reads them: straight off the
 -- per-player netvars the server hooks already :set(). Returns an array of codec records (8 ints +
 -- userid). Players with a nil/"" userid are skipped (they can't be keyed in the store).
@@ -1074,6 +1197,10 @@ local function build_local_records()
         sanity_penalty = (v.customsanitydebuff ~= nil and v.customsanitydebuff:value()) or 0,
         flags = flags,
         origin = my_origin,
+        temp = (v.customtemp ~= nil and (v.customtemp:value() - TEMP_NETVAR_OFFSET)) or nil,
+        temp_rate = rate_signed((v.customtemprate ~= nil and v.customtemprate:value()) or 0),
+        moisture = (v.custommoisture ~= nil and v.custommoisture:value()) or 0,
+        moisture_rate = rate_signed((v.custommoisturerate ~= nil and v.custommoisturerate:value()) or 0),
       }
     end
   end
@@ -1137,6 +1264,7 @@ AddSimPostInit(function()
   GLOBAL.TheWorld:DoPeriodicTask(
     0.5,
     guarded("broadcast", function()
+      refresh_thermal_netvars()
       -- Recompute each tick so it resolves once TheShard is ready. tostring() is REQUIRED:
       -- Shard_GetConnectedShards() keys are STRINGS but GetShardId() returns a NUMBER, so without
       -- coercion `"1" ~= 1` is always true and the shard would fail to exclude itself (sending its
@@ -1283,3 +1411,28 @@ local function attach_carrier(inst)
 end
 AddPrefabPostInit("forest_network", attach_carrier)
 AddPrefabPostInit("cave_network", attach_carrier)
+
+-- v2026.13 client-side keybind registration. AddSimPostInit re-runs on each shard load/migration, but
+-- TheInput is a session-global singleton whose handlers persist, so guard with a module flag to register
+-- exactly once. Dedicated server has no key input -> skip. key_compact/key_hide_hud are client config
+-- (read with the local-config flag); -1 (None) disables that bind. Collision is non-fatal (all handlers
+-- fire), so a registration guard is the only mitigation needed.
+local _phud_keys_registered = false
+AddSimPostInit(function()
+  if GLOBAL.TheNet:IsDedicated() or _phud_keys_registered then
+    return
+  end
+  _phud_keys_registered = true
+  local kc = GetModConfigData("key_compact", true)
+  if kc ~= nil and kc ~= -1 then
+    GLOBAL.TheInput:AddKeyDownHandler(kc, function()
+      GLOBAL.PartyHud_ToggleCompact()
+    end)
+  end
+  local kh = GetModConfigData("key_hide_hud", true)
+  if kh ~= nil and kh ~= -1 then
+    GLOBAL.TheInput:AddKeyDownHandler(kh, function()
+      GLOBAL.PartyHud_ToggleHidden()
+    end)
+  end
+end)
