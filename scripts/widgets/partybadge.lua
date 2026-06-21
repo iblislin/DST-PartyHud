@@ -15,12 +15,21 @@ local badgemath = require("partyhud_badge")
 -- name_colour reconciliation), extracted so it can be busted-tested with zero engine deps. The widget
 -- reads its live state (player colour, foreign flag) and delegates the arithmetic here.
 local avatarmath = require("partyhud_avatar")
+-- v2026.13: pure popup decision logic (temp_popup / moisture_popup), extracted for busted testing.
+-- The widget calls these to decide whether the on-demand sub-rings should show each refresh.
+local status = require("partyhud_status")
 
 -- canonical DST badge tints (from widgets/healthbadge.lua, hungerbadge.lua, sanitybadge.lua):
 -- health red, hunger gold, sanity ORANGE (the blue {191,232,240} is the lunacy variant, not normal sanity)
 local HEALTHBADGE_TINT = { 174 / 255, 21 / 255, 21 / 255, 1 }
 local HUNGER_TINT = { 255 / 255, 204 / 255, 51 / 255, 1 }
 local SANITY_TINT = { 232 / 255, 123 / 255, 15 / 255, 1 }
+-- v2026.13 on-demand sub-ring tints:
+-- moisture: desaturated blue to match the vanilla wetness colour palette
+local MOISTURE_TINT = { 48 / 255, 97 / 255, 169 / 255, 1 }
+-- temperature ring uses SetMultColour per-refresh (cyan cold / red-orange hot), so no static tint here;
+-- use neutral white as the construction tint so any OverrideSymbol passes through clean.
+local TEMP_TINT = { 1, 1, 1, 1 }
 -- main-ring warning-pulse colours, by priority (a player can't be in two of these at once)
 local ONFIRE_TINT = { 1, 0.45, 0, 1 } -- on fire (orange)
 local OVERHEAT_TINT = { 1, 0.1, 0.1, 1 } -- overheating (red)
@@ -40,6 +49,9 @@ local SANITY_RATE_ANIM = {
 local SUB_SCALE = 0.5
 local SUB_Y = -42
 local SUB_X = 17
+-- v2026.13 top sub-ring row (moisture left / temperature right), placed ABOVE the HP ring centre,
+-- tucked against it, clearing the name label (y≈40) and the corner avatar. PROVISIONAL — tuned in-engine.
+local SUB_Y_TOP = 20
 
 -- v2026.11 corner avatar: a small flat head inset in the badge's top-LEFT corner so it does not collide
 -- with the HP number (centre) or the sub-rings (bottom). Scale + offset visually tuned to sit just
@@ -100,6 +112,57 @@ local PartyBadge = Class(Badge, function(self, owner)
   self.sanityarrow:SetPosition(0, 0, 0)
   self.sanityarrow:Hide()
   self.sanityarrow_cur = nil
+
+  -- v2026.13 moisture sub-ring (blue), top-LEFT above the HP ring centre.
+  -- Mirrors the vanilla moisturemeter look via OverrideSymbol("icon","status_wet","icon").
+  -- Constructed with iconbuild nil (no separate icon atlas build; the symbol override below supplies
+  -- the water-drop icon from the status_wet build). PROVISIONAL position tuned in-engine.
+  self.moisturebadge = self:AddChild(Badge(nil, owner, MOISTURE_TINT, nil, nil, nil, true))
+  self.moisturebadge:SetScale(SUB_SCALE)
+  self.moisturebadge:SetPosition(-SUB_X, SUB_Y_TOP, 0)
+  -- Override the icon symbol with the vanilla water-drop from the status_wet build (the build that
+  -- ships with DST; same one the vanilla moisturemeter uses for its icon glyph). NEEDS in-engine
+  -- verification: if status_wet is not pre-loaded in this context, the symbol override may be a
+  -- no-op until the asset is loaded. Flag for Task 10.
+  self.moisturebadge.anim:GetAnimState():OverrideSymbol("icon", "status_wet", "icon")
+  self.moisturebadge:Hide()
+
+  -- moisture rate arrow, parented to the sub-ring's underNumber (same pattern as sanityarrow).
+  self.moisturearrow = self.moisturebadge.underNumber:AddChild(UIAnim())
+  self.moisturearrow:GetAnimState():SetBank("sanity_arrow")
+  self.moisturearrow:GetAnimState():SetBuild("sanity_arrow")
+  self.moisturearrow:GetAnimState():PlayAnimation("neutral")
+  self.moisturearrow:GetAnimState():AnimateWhilePaused(false)
+  self.moisturearrow:SetClickable(false)
+  self.moisturearrow:SetPosition(0, 0, 0)
+  self.moisturearrow:Hide()
+  self.moisturearrow_cur = nil
+
+  -- v2026.13 temperature sub-ring (white base tint; tinted cyan or red-orange per kind via
+  -- SetMultColour in SetThermal), top-RIGHT above the HP ring centre.
+  -- Uses the temperature_meter build for the icon. NEEDS in-engine verification: if
+  -- temperature_meter is the correct build name for the DST thermometer asset, verify in Task 10.
+  -- PROVISIONAL position tuned in-engine.
+  self.tempbadge = self:AddChild(Badge(nil, owner, TEMP_TINT, "temperature_meter", nil, nil, true))
+  self.tempbadge:SetScale(SUB_SCALE)
+  self.tempbadge:SetPosition(SUB_X, SUB_Y_TOP, 0)
+  self.tempbadge:Hide()
+
+  -- temperature rate arrow, parented to the sub-ring's underNumber (same pattern as sanityarrow).
+  self.temparrow = self.tempbadge.underNumber:AddChild(UIAnim())
+  self.temparrow:GetAnimState():SetBank("sanity_arrow")
+  self.temparrow:GetAnimState():SetBuild("sanity_arrow")
+  self.temparrow:GetAnimState():PlayAnimation("neutral")
+  self.temparrow:GetAnimState():AnimateWhilePaused(false)
+  self.temparrow:SetClickable(false)
+  self.temparrow:SetPosition(0, 0, 0)
+  self.temparrow:Hide()
+  self.temparrow_cur = nil
+
+  -- v2026.13 per-badge thermal-ring config flags. Default both enabled; overridden once at
+  -- construct by modmain calling SetThermalEnabled from the show_temperature/show_moisture config.
+  self.show_temp_cfg = true
+  self.show_moisture_cfg = true
 
   -- max-HP penalty "blackout" overlay (mirrors vanilla healthbadge.topperanim): a black,
   -- vertically-flipped status_meter that darkens the lost-max region from the TOP. Driven in
@@ -624,6 +687,94 @@ function PartyBadge:SetSanityRate(ratescale)
   self.sanityarrow:Show()
 end
 
+-- v2026.13: helper to drive a rate arrow UIAnim from a signed rate (-1/0/1). Plays the
+-- appropriate increase/decrease animation; hides the arrow when rate is 0 (steady). The rate
+-- arrow uses the sanity_arrow build animations (same as sanityarrow / temparrow / moisturearrow).
+-- cache_field is the *_cur field name for idempotent replays (same pattern as sanityarrow_cur).
+local RATE_ANIM_INC = "arrow_loop_increase"
+local RATE_ANIM_DEC = "arrow_loop_decrease"
+
+local function set_rate_arrow(arrow, rate, cache_ref)
+  local anim = (rate == 1 and RATE_ANIM_INC) or (rate == -1 and RATE_ANIM_DEC) or nil
+  if anim == nil then
+    arrow:Hide()
+    return nil
+  end
+  if cache_ref ~= anim then
+    arrow:GetAnimState():PlayAnimation(anim, true)
+  end
+  arrow:Show()
+  return anim
+end
+
+-- v2026.13: store the per-badge thermal-ring config flags (from the show_temperature /
+-- show_moisture modinfo options). Called ONCE at construct time, like SetSubGauges.
+-- When false, the corresponding ring NEVER shows regardless of SetThermal calls.
+function PartyBadge:SetThermalEnabled(show_temp, show_moisture)
+  self.show_temp_cfg = show_temp ~= false
+  self.show_moisture_cfg = show_moisture ~= false
+  -- Ensure disabled rings stay hidden (in case SetThermal ran before this call).
+  if not self.show_temp_cfg then
+    self.tempbadge:Hide()
+    self.temparrow:Hide()
+    self.temparrow_cur = nil
+  end
+  if not self.show_moisture_cfg then
+    self.moisturebadge:Hide()
+    self.moisturearrow:Hide()
+    self.moisturearrow_cur = nil
+  end
+end
+
+-- v2026.13: per-refresh driver for the two on-demand thermal sub-rings.
+-- Called from modmain's UpdateBadges for BOTH the local and foreign branches.
+--   temp          : signed real temperature in DST internal units, or nil (v2 peer)
+--   temp_rate     : signed -1/0/1 (warming=+1, cooling=-1, steady=0)
+--   moisture      : 0..100 wetness value
+--   moisture_rate : signed -1/0/1 (wetter=+1, drier=-1, steady=0)
+-- Internally calls status.moisture_popup / status.temp_popup (pure; no engine deps) to decide
+-- show/hide each ring per the danger-band + fast-rate popup rules. Respects the cfg flags set
+-- by SetThermalEnabled. temp==nil -> temp ring stays off (v2 peer backward compat).
+function PartyBadge:SetThermal(temp, temp_rate, moisture, moisture_rate)
+  -- moisture sub-ring --------------------------------------------------------
+  if self.show_moisture_cfg and status.moisture_popup(moisture) then
+    -- Drive the fill: moisture is 0..100; Badge.SetPercent(fraction, scale_max).
+    local mfrac = (moisture or 0) / 100
+    self.moisturebadge:SetPercent(mfrac, 100)
+    self.moisturearrow_cur = set_rate_arrow(self.moisturearrow, moisture_rate or 0, self.moisturearrow_cur)
+    self.moisturebadge:Show()
+  else
+    self.moisturebadge:Hide()
+    self.moisturearrow:Hide()
+    self.moisturearrow_cur = nil
+  end
+
+  -- temperature sub-ring ------------------------------------------------------
+  local show_t, kind = status.temp_popup(temp, temp_rate)
+  if self.show_temp_cfg and show_t then
+    -- Tint the ring fill to signal cold (cyan) or hot (red-orange) via SetMultColour on the
+    -- fill anim (the same element SetStatus drives for the main ring pulse). The tint is applied
+    -- to tempbadge.anim so the ring fill takes the colour; the backing stays neutral.
+    -- NEEDS in-engine verification: confirm tempbadge.anim is the correct child for SetMultColour
+    -- on a Badge constructed without an explicit build (the fill ring anim). Flag for Task 10.
+    if kind == "cold" then
+      self.tempbadge.anim:GetAnimState():SetMultColour(0.4, 0.8, 1, 1)
+    else -- kind == "hot"
+      self.tempbadge.anim:GetAnimState():SetMultColour(1, 0.4, 0.1, 1)
+    end
+    -- Drive the fill: temp is a real number; we don't have a meaningful 0..max range for the
+    -- fill (temperature_meter is cosmetic). Show a neutral 50% fill (static); the colour + arrow
+    -- carry the semantic. Drives 0.5 fraction of 100 scale_max.
+    self.tempbadge:SetPercent(0.5, 100)
+    self.temparrow_cur = set_rate_arrow(self.temparrow, temp_rate or 0, self.temparrow_cur)
+    self.tempbadge:Show()
+  else
+    self.tempbadge:Hide()
+    self.temparrow:Hide()
+    self.temparrow_cur = nil
+  end
+end
+
 -- v2026.9: single source of truth for the ring-border (circleframe) colour. Both the low-HP blink
 -- and the foreign-dim want to write circleframe; routing every write through here keeps them from
 -- desyncing (same idea as the v2026.8 "one cache-syncing relayout fn" fix).
@@ -729,6 +880,23 @@ function PartyBadge:SetForeign(isforeign, label, sameshard)
     self.sanitybadge.num:SetColour(1, 1, 1, a)
   end
 
+  -- v2026.13 thermal sub-rings: dim with the rest when foreign, but only if currently shown
+  -- (on-demand rings -- SetThermal decides show/hide; don't force-show them here). Apply the
+  -- same set_anim_alpha treatment used for the hunger/sanity sub-rings above.
+  if self.moisturebadge ~= nil then
+    set_anim_alpha(self.moisturebadge.anim, a, MOISTURE_TINT[1], MOISTURE_TINT[2], MOISTURE_TINT[3])
+    set_anim_alpha(self.moisturebadge.backing, a)
+    set_anim_alpha(self.moisturebadge.circleframe, a)
+  end
+  if self.tempbadge ~= nil then
+    -- tempbadge.anim carries a dynamic SetMultColour tint (cyan/red-orange per kind); we
+    -- can only dim its alpha here without knowing the current RGB. Re-assert white RGB so the
+    -- cold/hot tint is re-applied cleanly on the next SetThermal call.
+    set_anim_alpha(self.tempbadge.anim, a)
+    set_anim_alpha(self.tempbadge.backing, a)
+    set_anim_alpha(self.tempbadge.circleframe, a)
+  end
+
   if self.foreign then
     -- live-only extras OFF defensively (caller already passes false flags + neutral rate, but a
     -- stale arrow shown the last time this slot rendered a LOCAL player must not linger).
@@ -736,6 +904,11 @@ function PartyBadge:SetForeign(isforeign, label, sameshard)
     self.hparrow_cur = nil
     self.sanityarrow:Hide()
     self.sanityarrow_cur = nil
+    -- v2026.13: hide thermal rate arrows too (they are live-only)
+    self.moisturearrow:Hide()
+    self.moisturearrow_cur = nil
+    self.temparrow:Hide()
+    self.temparrow_cur = nil
 
     -- shard label, created lazily. Parented to the badge AFTER the ctor children so it draws on
     -- top (z-order: later AddChild = above), placed above the name label so the two don't overlap.
@@ -755,6 +928,15 @@ end
 function PartyBadge:HideBadge()
   self:_set_low_hp(false) -- stop any blink task before hiding a departed / empty slot
   self:_HideAvatars()
+  -- v2026.13: ensure thermal sub-rings don't linger when the slot is hidden (the rings are
+  -- on-demand -- SetThermal decides visibility -- but a stale show from a prior occupant must
+  -- not carry over to the next occupant before SetThermal runs).
+  self.moisturebadge:Hide()
+  self.moisturearrow:Hide()
+  self.moisturearrow_cur = nil
+  self.tempbadge:Hide()
+  self.temparrow:Hide()
+  self.temparrow_cur = nil
   self:Hide()
 end
 
@@ -803,6 +985,13 @@ function PartyBadge:ShowDead()
   self.sanitybadge:Hide()
   self.sanityarrow:Hide()
   self.sanityarrow_cur = nil
+  -- v2026.13: hide thermal sub-rings + their arrows (dead teammate shows only the skull)
+  self.moisturebadge:Hide()
+  self.moisturearrow:Hide()
+  self.moisturearrow_cur = nil
+  self.tempbadge:Hide()
+  self.temparrow:Hide()
+  self.temparrow_cur = nil
   self:StopWarning()
   self.hparrow:Hide()
   self.hparrow_cur = nil
