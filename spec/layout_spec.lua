@@ -308,3 +308,65 @@ describe("partyhud layout math", function()
     end)
   end)
 end)
+
+describe("partyhud_layout — name_size vertical gap", function()
+  -- Reuses the same canonical defaults as the compute_badge_positions tests above: 1280x720 @
+  -- hudscale 1.0, vertical layout (layout_mode 2), no-minimap position (position_mode 2),
+  -- vert_x/vert_y anchor, no backpack, no second-row band. percol_count = 3 at this geometry.
+  local function base(badge_count, over)
+    local o = {
+      layout_mode = 2,
+      position_mode = 2,
+      phud_xpos = -100,
+      phud_ypos = 120,
+      badge_count = badge_count,
+      show_substatus = true,
+      screen_w = 1280,
+      screen_h = 720,
+      hudscale = 1.0,
+      bpmode = 0,
+      second_row_cols = 0,
+      second_row_reserve = 0,
+      vert_x = 0,
+      vert_y = -130,
+      vert_gap = -120,
+      vert_gap_compact = -90,
+      vert_col_w = 80,
+      vert_bottom_reserve = 65,
+      vert_bottom_reserve_free = 40,
+      backpack_shift_x = 100,
+      backpack_bottom_extra = 20,
+      horizontal_step = -70,
+    }
+    if over then
+      for k, v in pairs(over) do
+        o[k] = v
+      end
+    end
+    return o
+  end
+
+  it("large name spaces vertical badges further apart than small", function()
+    -- Two same-column consecutive badges (row 0 and row 1 in col 0) must be further apart when
+    -- name_size="large" than when name_size="small", because larger names need more vertical room.
+    local small = M.compute_badge_positions(base(2, { name_size = "small" }))
+    local large = M.compute_badge_positions(base(2, { name_size = "large" }))
+    -- Both produce 2 badges in col 0, rows 0 and 1. Compare the absolute y gap.
+    local gap_small = math.abs(small[1].y - small[2].y)
+    local gap_large = math.abs(large[1].y - large[2].y)
+    assert.is_true(gap_large > gap_small)
+  end)
+
+  it("name_size defaults to medium and horizontal layout is unaffected by name_size", function()
+    -- Default (no name_size) must equal medium=0 gap, and a horizontal row must be identical
+    -- regardless of name_size because the name_size path only applies to the vertical branch.
+    local h_default = M.compute_badge_positions(base(4, { layout_mode = 0 }))
+    local h_large = M.compute_badge_positions(base(4, { layout_mode = 0, name_size = "large" }))
+    assert.are.same(h_default, h_large)
+
+    -- Also confirm default vertical == medium vertical (gap 0 for medium -> same positions).
+    local v_default = M.compute_badge_positions(base(4))
+    local v_medium = M.compute_badge_positions(base(4, { name_size = "medium" }))
+    assert.are.same(v_default, v_medium)
+  end)
+end)

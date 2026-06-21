@@ -10,6 +10,13 @@ M.MAX_PROP = 1.25 -- MAX_HUD_SCALE upscale cap
 M.BADGE_BOTTOM = 60 -- a badge's sub-ring bottom, below its origin
 M.PERCOL_FALLBACK = 6 -- safe per-column count if screen/HUD scale is unreadable
 
+-- Extra vertical px added to each per-badge step in the VERTICAL layout for a given name font size.
+-- Horizontal layout is unaffected (names are not displayed next to horizontal badges).
+-- medium = 0 keeps the existing default positions unchanged (so snapshot goldens stay green).
+-- large = 14 gives taller names enough room above the badge below; provisional, tuned in-engine.
+-- small = 0 matches the game's default visual density (small names fit within the standard gap).
+M.NAME_GAP = { small = 0, medium = 0, large = 14 }
+
 -- badges that fit in one column given screen geometry. >= 1 (or PERCOL_FALLBACK if screen/scale
 -- unreadable). vgap is the NEGATIVE row gap (rows go down); bottom_reserve is the bottom keep-out.
 -- Dividing by `prop` is the v2026.8 proportional-scale fix: a sub-720 window shrinks the real badges,
@@ -135,6 +142,11 @@ function M.compute_badge_positions(opts)
   if opts.position_mode == 0 or opts.position_mode == 1 then
     vstartx, vstarty = opts.phud_xpos, opts.phud_ypos
   end
+  -- Larger teammate-name fonts need extra vertical room so the name label above one badge does not
+  -- crowd the badge below it. name_size defaults to "medium" (NAME_GAP.medium = 0, no change).
+  -- Only the vertical branch reads this; horizontal rows don't display names alongside badges.
+  local name_size = opts.name_size or "medium"
+  local name_extra = M.NAME_GAP[name_size] or 0
   local vgap = opts.show_substatus and opts.vert_gap or opts.vert_gap_compact
   local bpmode = opts.bpmode
   if bpmode == 1 then
@@ -159,7 +171,10 @@ function M.compute_badge_positions(opts)
       out[i] = {
         index = i,
         x = vstartx - opts.vert_col_w * col,
-        y = top + vgap * row,
+        -- name_extra adds extra downward spacing per row so that larger teammate-name labels
+        -- (which render above each badge) do not overlap the badge below. vgap is negative, so
+        -- subtracting name_extra*row pushes rows further apart (more negative y = lower on screen).
+        y = top + vgap * row - name_extra * row,
         col = col,
         row = row,
       }
