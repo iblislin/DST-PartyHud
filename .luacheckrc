@@ -44,4 +44,7 @@ files["modinfo.lua"] = {
     "icon", "icon_atlas", "forumthread", "folder_name",
     "mod_dependencies", "standalone",
   },
+  read_globals = {
+    "KEY_O", "KEY_P", "KEY_N", "KEY_B", "KEY_K", "KEY_L", "KEY_H",
+  },
 }
