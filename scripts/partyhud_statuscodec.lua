@@ -12,12 +12,14 @@
 --   <version>|<count>|<rec>|<rec>|...
 --
 -- where each <rec> is a version-dependent number of fields joined by ":" --
---   v1 (9 fields): userid:hp_cur:hp_max:hp_penalty:hunger:sanity_cur:sanity_max:sanity_penalty:flags
+--   v1 (9 fields):  userid:hp_cur:hp_max:hp_penalty:hunger:sanity_cur:sanity_max:sanity_penalty:flags
 --   v2 (10 fields): ...:flags:origin   (origin = the numeric shard id the record came from)
+--   v3 (14 fields): ...:origin:temp:temp_rate:moisture:moisture_rate
 --
--- The per-record field count is therefore version-aware: v1 = 9, v2 = 10. v2 appends a single
--- numeric `origin` field after `flags`; a v1 payload simply has no origin (decoded records omit
--- the key, leaving it nil). origin is NUMERIC and is never stringified.
+-- The per-record field count is therefore version-aware: v1=9, v2=10, v3=14. v2 appends a single
+-- numeric `origin` field after `flags`; v3 further appends temp, temp_rate, moisture, moisture_rate
+-- after origin. A v1 payload omits origin (nil); a v2 payload omits temp/moisture (nil).
+-- All new numeric fields are NEVER stringified.
 --
 -- Separators ("|" and ":") are safe because DST userids are "KU_" + base64-ish [A-Za-z0-9_-] and
 -- never contain them (decode still validates and rejects a userid carrying a separator).
@@ -28,8 +30,8 @@
 
 local M = {}
 
-M.PROTOCOL_VERSION = 2
-local SUPPORTED = { [1] = true, [2] = true }
+M.PROTOCOL_VERSION = 3
+local SUPPORTED = { [1] = true, [2] = true, [3] = true }
 
 -- status flag bits (a single 0..255 integer field)
 M.FLAGS = {
@@ -65,7 +67,7 @@ end
 
 local FIELD_SEP = ":"
 local REC_SEP = "|"
-local NUM_FIELDS = 9 -- v1 baseline: userid + 8 numerics (v2 = NUM_FIELDS + 1, adds origin)
+local NUM_FIELDS = 9 -- v1 baseline: userid + 8 numerics (v2 = NUM_FIELDS+1, adds origin; v3 = NUM_FIELDS+5)
 
 -- A de-dup set so a surprise out-of-range value logs ONCE per field name, not once per 0.5s payload.
 local _clamp_logged = {}
@@ -98,9 +100,12 @@ end
 
 -- encode(records [, version]) -> string
 -- records: array of { userid=string, hp_cur, hp_max, hp_penalty, hunger,
---                     sanity_cur, sanity_max, sanity_penalty, flags [, origin] }
---   8 small ints + userid for v1; v2 additionally emits the numeric `origin` (shard id).
--- version defaults to M.PROTOCOL_VERSION; the field count emitted matches the version (v1=9, v2=10).
+--                     sanity_cur, sanity_max, sanity_penalty, flags [, origin]
+--                     [, temp, temp_rate, moisture, moisture_rate] }
+--   8 small ints + userid for v1; v2 additionally emits the numeric `origin` (shard id);
+--   v3 additionally emits temp, temp_rate, moisture, moisture_rate after origin.
+-- version defaults to M.PROTOCOL_VERSION; the field count emitted matches the version
+--   (v1=9, v2=10, v3=14).
 function M.encode(records, version)
   version = version or M.PROTOCOL_VERSION
   -- The count header MUST match the records the body actually emits. ipairs (correctly) stops at
@@ -132,6 +137,13 @@ function M.encode(records, version)
     if version >= 2 then
       -- origin is NUMERIC (the shard id the record came from); never stringify it.
       rec[#rec + 1] = math.floor((r.origin or 0) + 0.5)
+    end
+    if version >= 3 then
+      -- v3 appends temp, temp_rate, moisture, moisture_rate after origin.
+      rec[#rec + 1] = math.floor((r.temp or 0) + 0.5)
+      rec[#rec + 1] = math.floor((r.temp_rate or 0) + 0.5)
+      rec[#rec + 1] = math.floor((r.moisture or 0) + 0.5)
+      rec[#rec + 1] = math.floor((r.moisture_rate or 0) + 0.5)
     end
     parts[#parts + 1] = table.concat(rec, FIELD_SEP)
   end
@@ -170,14 +182,29 @@ function M.decode(str)
     return nil, "record count mismatch (header says " .. count .. ", got " .. (#fields - 2) .. ")"
   end
 
-  -- Per-record field count is version-aware: v1 = NUM_FIELDS (9), v2 = NUM_FIELDS + 1 (adds origin).
-  local nfields = (version >= 2) and (NUM_FIELDS + 1) or NUM_FIELDS
+  -- Per-record field count is version-aware:
+  --   v1 = NUM_FIELDS (9), v2 = NUM_FIELDS+1 (adds origin), v3 = NUM_FIELDS+5 (adds temp/moisture).
+  local nfields
+  if version >= 3 then
+    nfields = NUM_FIELDS + 5
+  elseif version >= 2 then
+    nfields = NUM_FIELDS + 1
+  else
+    nfields = NUM_FIELDS
+  end
 
-  -- Numeric field names (parsed in order from f[2..]). v2 appends "origin" after "flags".
-  -- A v1 payload omits origin entirely, so the decoded record has no origin key (nil).
+  -- Numeric field names (parsed in order from f[2..]). v2 appends "origin" after "flags";
+  -- v3 further appends "temp", "temp_rate", "moisture", "moisture_rate" after "origin".
+  -- A v1 payload omits origin entirely (nil); a v2 payload omits temp/moisture (nil).
   local NUMERIC = { "hp_cur", "hp_max", "hp_penalty", "hunger", "sanity_cur", "sanity_max", "sanity_penalty", "flags" }
   if version >= 2 then
     NUMERIC[#NUMERIC + 1] = "origin"
+  end
+  if version >= 3 then
+    NUMERIC[#NUMERIC + 1] = "temp"
+    NUMERIC[#NUMERIC + 1] = "temp_rate"
+    NUMERIC[#NUMERIC + 1] = "moisture"
+    NUMERIC[#NUMERIC + 1] = "moisture_rate"
   end
 
   local records = {}
@@ -237,13 +264,14 @@ do
       sanity_penalty = 0,
       flags = 0,
       origin = 1,
+      temp = 75,
     },
   }
   local ver, out = M.decode(M.encode(probe))
   assert(ver == M.PROTOCOL_VERSION, "self-check: decoded version mismatch")
   assert(out ~= nil and out[1] ~= nil, "self-check: probe failed to round-trip")
   assert(
-    out[1].userid == "KU_selfcheck" and out[1].hp_cur == 100 and out[1].origin == 1,
+    out[1].userid == "KU_selfcheck" and out[1].hp_cur == 100 and out[1].origin == 1 and out[1].temp == 75,
     "self-check: probe field mismatch"
   )
 end

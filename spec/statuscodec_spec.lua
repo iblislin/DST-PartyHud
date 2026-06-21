@@ -19,9 +19,13 @@ local function sample(n)
       sanity_max = 200,
       sanity_penalty = (i % 3 == 0) and 50 or 0,
       flags = 0,
-      -- origin (numeric shard id) is part of the v2 wire format (the current default
-      -- PROTOCOL_VERSION), so the default-version round-trip preserves it exactly.
+      -- origin (numeric shard id) is part of the v2 wire format and later.
       origin = (i % 2 == 0) and 2 or 1,
+      -- v3 temp/moisture fields (default 0 for sample records)
+      temp = 0,
+      temp_rate = 0,
+      moisture = 0,
+      moisture_rate = 0,
     }
   end
   return recs
@@ -68,6 +72,10 @@ describe("partyhud status codec", function()
           sanity_penalty = 95,
           flags = 0,
           origin = 1,
+          temp = 0,
+          temp_rate = 0,
+          moisture = 0,
+          moisture_rate = 0,
         },
       }
       local _, out = codec.decode(codec.encode(recs))
@@ -78,12 +86,12 @@ describe("partyhud status codec", function()
   describe("protocol version byte", function()
     it("prefixes the encoded payload with the version", function()
       local s = codec.encode(sample(2))
-      assert.are.equal("2|", s:sub(1, 2))
+      assert.are.equal("3|", s:sub(1, 2))
     end)
 
     it("rejects an unsupported version", function()
       local s = codec.encode(sample(1))
-      local bumped = s:gsub("^2|", "9|")
+      local bumped = s:gsub("^3|", "9|")
       local ver, err = codec.decode(bumped)
       assert.is_nil(ver)
       assert.is_truthy(err:find("unsupported protocol version"))
@@ -174,13 +182,13 @@ describe("partyhud status codec", function()
   end)
 
   describe("protocol v2 origin field", function()
-    it("defaults to version 2", function()
-      assert.are.equal(2, codec.PROTOCOL_VERSION)
+    it("defaults to version 3", function()
+      assert.are.equal(3, codec.PROTOCOL_VERSION)
       local s = codec.encode(sample(1))
-      assert.are.equal("2|", s:sub(1, 2))
+      assert.are.equal("3|", s:sub(1, 2))
     end)
 
-    it("round-trips origin on the default (v2) version", function()
+    it("round-trips origin on the v2 version", function()
       local recs = {
         {
           userid = "KU_caves",
@@ -195,7 +203,7 @@ describe("partyhud status codec", function()
           origin = 7,
         },
       }
-      local ver, out = codec.decode(codec.encode(recs))
+      local ver, out = codec.decode(codec.encode(recs, 2))
       assert.are.equal(2, ver)
       assert.are.equal(7, out[1].origin)
       assert.are.same(recs, out)
@@ -216,7 +224,7 @@ describe("partyhud status codec", function()
           flags = 0,
         },
       }
-      local _, out = codec.decode(codec.encode(recs))
+      local _, out = codec.decode(codec.encode(recs, 2))
       assert.are.equal(0, out[1].origin)
     end)
 
@@ -259,7 +267,7 @@ describe("partyhud status codec", function()
           origin = 0,
         },
       }
-      local ver, out = codec.decode(codec.encode(recs))
+      local ver, out = codec.decode(codec.encode(recs, 2))
       assert.are.equal(2, ver)
       assert.are.same(recs, out)
       assert.are.equal(1, out[1].origin)
@@ -277,11 +285,12 @@ describe("partyhud status codec", function()
       assert.are.equal(1, ver)
       assert.is_nil(out[1].origin)
       assert.is_nil(out[2].origin)
-      -- every non-origin field round-trips exactly; origin is intentionally dropped by v1.
+      -- every v1 field round-trips exactly; origin/temp/moisture are intentionally dropped by v1.
+      local v1_only = { origin = true, temp = true, temp_rate = true, moisture = true, moisture_rate = true }
       for i = 1, #recs do
         local expected = {}
         for k, v in pairs(recs[i]) do
-          if k ~= "origin" then
+          if not v1_only[k] then
             expected[k] = v
           end
         end
@@ -327,6 +336,10 @@ describe("partyhud status codec", function()
           sanity_penalty = 0,
           flags = 0,
           origin = 1,
+          temp = 75,
+          temp_rate = 0,
+          moisture = 0,
+          moisture_rate = 0,
         },
       }
       local ver, out = codec.decode(codec.encode(probe))
@@ -362,5 +375,44 @@ describe("partyhud status codec", function()
       local ver = codec.decode("1|1|KU_x:-5:150:0:80:120:200:0:0")
       assert.are.equal(1, ver)
     end)
+  end)
+end)
+
+describe("partyhud_statuscodec — v3 temp/moisture", function()
+  local M = codec
+  local rec = {
+    userid = "KU_v3",
+    hp_cur = 90,
+    hp_max = 150,
+    hp_penalty = 0,
+    hunger = 80,
+    hunger_max = 150,
+    sanity = 70,
+    sanity_max = 200,
+    sanity_penalty = 0,
+    flags = 0,
+    origin = 1,
+    temp = 75,
+    temp_rate = 1,
+    moisture = 42,
+    moisture_rate = 0,
+  }
+  it("v3 round-trips temp + moisture fields", function()
+    local ver, out = M.decode(M.encode({ rec }, 3))
+    assert.are.equal(3, ver)
+    assert.are.equal(75, out[1].temp)
+    assert.are.equal(1, out[1].temp_rate)
+    assert.are.equal(42, out[1].moisture)
+    assert.are.equal(0, out[1].moisture_rate)
+  end)
+  it("a v2 payload decodes with nil temp/moisture (backward tolerant)", function()
+    local ver, out = M.decode(M.encode({ rec }, 2))
+    assert.are.equal(2, ver)
+    assert.is_nil(out[1].temp)
+    assert.is_nil(out[1].moisture)
+    assert.are.equal(1, out[1].origin) -- v2 fields still intact
+  end)
+  it("PROTOCOL_VERSION is 3", function()
+    assert.are.equal(3, M.PROTOCOL_VERSION)
   end)
 end)
