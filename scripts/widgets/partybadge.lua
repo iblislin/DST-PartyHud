@@ -45,6 +45,11 @@ local SANITY_RATE_ANIM = {
   [6] = "arrow_loop_decrease", -- DECREASE_LOW
 }
 
+-- v2026.13 name font sizes (px). "medium" 20 matches the ctor default so SetNameSize("medium") is a
+-- no-op on an unmodified badge. The foreign label is created at size 16 (4px smaller); we preserve
+-- that 4px gap when SetNameSize is called.
+local NAME_PX = { small = 16, medium = 20, large = 26 }
+
 -- sub-ring layout (relative to the main HP ring at 0,0)
 local SUB_SCALE = 0.5
 local SUB_Y = -42
@@ -217,6 +222,8 @@ local PartyBadge = Class(Badge, function(self, owner)
   -- currently showing a far (other-shard) player; the label Text is created lazily by SetForeign.
   self.foreign = false
   self.foreignlabel = nil
+  -- v2026.13 name-size: tracks the current name px so a lazily-created foreignlabel can pick it up.
+  self._name_px = NAME_PX.medium
 
   -- v2026.9 low-HP alert state. low_hp_threshold (0..1, 0 = disabled) is set after construct from
   -- the low_hp_alert config; the rest are driven by _set_low_hp / the blink task.
@@ -250,6 +257,18 @@ local PartyBadge = Class(Badge, function(self, owner)
   self.avatar_head = nil -- animated UIAnim child (centre style)
   self._avatar_identity = nil
   self._hp_number_was_hover = false -- centre style forces the HP number hover-only; this tracks it
+
+  -- v2026.13 hover detail panel: a Text child shown while the badge has focus, listing cached stats
+  -- (HP cur/max, hunger, sanity + rate, temp°, moisture%, fire/overheat/freeze). Created AFTER all
+  -- other children so it draws on top (later AddChild = higher z-order). Positioned BELOW the badge
+  -- so it does not cover the sub-rings. PROVISIONAL position (-75) -- tuned in-engine (Task 10).
+  self.detailpanel = self:AddChild(Text(BODYTEXTFONT, 14))
+  self.detailpanel:SetHAlign(ANCHOR_MIDDLE)
+  self.detailpanel:SetPosition(0, -75, 0)
+  self.detailpanel:Hide()
+
+  -- compact state: tracks whether SetCompact(true) has been called. Default false (full detail).
+  self.compact = false
 end)
 
 -- v2026.8: dim alpha applied to every visible badge element when the slot shows a FOREIGN
@@ -289,6 +308,147 @@ function PartyBadge:SetSubGauges(enabled)
     self.sanitybadge:Hide()
     self.sanityarrow:Hide()
     self.sanityarrow_cur = nil
+  end
+end
+
+-- v2026.13: apply font size "small"|"medium"|"large" to the name label and to the foreign label
+-- (if it has been lazily created). medium=20 matches the ctor default, so SetNameSize("medium")
+-- is a no-op. The foreign label is kept 4px smaller (matches its ctor size 16 vs name 20).
+function PartyBadge:SetNameSize(size)
+  local px = NAME_PX[size] or NAME_PX.medium
+  self._name_px = px
+  self.name:SetSize(px)
+  if self.foreignlabel ~= nil then
+    self.foreignlabel:SetSize(px - 4)
+  end
+end
+
+-- v2026.13: flip between compact (HP ring + name only) and full detail. Idempotent.
+-- compact=true  -> hide all sub-rings, the HP number, and the avatar; keep the main ring + name.
+-- compact=false -> restore per the static config (subvisible, thermal cfg, hp_number, avatar).
+--                  On-demand thermal rings stay hidden until the next SetThermal call (≤0.5 s).
+-- Does NOT touch self.dead -- the dead state is independent and must not be overwritten here.
+function PartyBadge:SetCompact(compact)
+  self.compact = compact and true or false
+  if self.compact then
+    self.hungerbadge:Hide()
+    self.sanitybadge:Hide()
+    self.sanityarrow:Hide()
+    self.sanityarrow_cur = nil
+    self.moisturebadge:Hide()
+    self.moisturearrow:Hide()
+    self.moisturearrow_cur = nil
+    self.tempbadge:Hide()
+    self.temparrow:Hide()
+    self.temparrow_cur = nil
+    if self.num ~= nil then
+      self.num:Hide()
+    end
+    self:_HideAvatars()
+    if self.detailpanel ~= nil then
+      self.detailpanel:Hide()
+    end
+  else
+    -- restore hunger/sanity sub-rings only when the sub-gauge config says so (mirror ShowBadge logic)
+    if self.subvisible then
+      self.hungerbadge:Show()
+      self.sanitybadge:Show()
+    else
+      self.hungerbadge:Hide()
+      self.sanitybadge:Hide()
+    end
+    -- restore HP number via the single-writer (honours hp_number_always + centre hover-only state)
+    self:_apply_hp_number_visibility(true)
+    -- restore avatar from the cached SetAvatar args (the last call's prefab/idflags/skin). On-demand
+    -- thermal rings stay hidden -- they reappear on the next SetThermal call from UpdateBadges (≤0.5 s).
+    if self._last_avatar_args ~= nil then
+      local laa = self._last_avatar_args
+      self:SetAvatar(laa.prefab, laa.idflags, laa.is_foreign, laa.base_skin)
+    end
+  end
+end
+
+-- v2026.13: build the hover detail string from cached badge values. All values are optional; each
+-- line is shown only when the relevant data is present. Temperature is shown as a plain N° value
+-- (no C/F suffix -- DST uses an internal scale; vanilla shows no unit label). Rate lines use a
+-- simple +/- from the RATE_SCALE enum: buckets 1-3 are rising (show +), 4-6 are falling (show -).
+function PartyBadge:_build_detail_string()
+  local lines = {}
+
+  -- HP cur/max (+ optional penalty %)
+  local hp_cur = self._hp_cur or 0
+  local hp_max = self._hp_max or 0
+  local penalty = self._hp_penalty
+  local hp_str = "HP: " .. tostring(math.floor(hp_cur + 0.5)) .. "/" .. tostring(math.floor((hp_max or 0) + 0.5))
+  if penalty ~= nil and penalty > 0 then
+    hp_str = hp_str .. " (-" .. tostring(math.floor(penalty * 100 + 0.5)) .. "%)"
+  end
+  lines[#lines + 1] = hp_str
+
+  -- Hunger (absolute current value)
+  lines[#lines + 1] = "Hunger: " .. tostring(math.floor((self._hunger or 0) + 0.5))
+
+  -- Sanity (absolute current value + rising/falling indicator from rate bucket)
+  local sanity_str = "Sanity: " .. tostring(math.floor((self._sanity or 0) + 0.5))
+  local sr = self._sanity_rate
+  if sr ~= nil and sr >= 1 and sr <= 3 then
+    sanity_str = sanity_str .. " +"
+  elseif sr ~= nil and sr >= 4 and sr <= 6 then
+    sanity_str = sanity_str .. " -"
+  end
+  lines[#lines + 1] = sanity_str
+
+  -- Temperature: plain N° (no C/F). Only shown when a value has been received (nil = v2 peer or
+  -- no SetThermal yet). round via math.floor(x + 0.5) (Lua 5.1: no math.round).
+  if self._temp ~= nil then
+    lines[#lines + 1] = "Temp: " .. tostring(math.floor(self._temp + 0.5)) .. "°"
+  end
+
+  -- Moisture: shown when wet (> 0)
+  if (self._moisture or 0) > 0 then
+    lines[#lines + 1] = "Wet: " .. tostring(math.floor(self._moisture + 0.5)) .. "%"
+  end
+
+  -- Active thermal status flags (fire > overheat > freeze, mutually exclusive in practice)
+  if self._onfire then
+    lines[#lines + 1] = "Fire"
+  elseif self._overheating then
+    lines[#lines + 1] = "Overheat"
+  elseif self._freezing then
+    lines[#lines + 1] = "Freeze"
+  end
+
+  return table.concat(lines, "\n")
+end
+
+-- v2026.13: focus handlers for the hover detail panel. The inherited Badge.OnGainFocus shows
+-- self.num (the HP number) and Badge.OnLoseFocus hides it; we MUST call them so the existing
+-- HP-number-on-hover behaviour is preserved.
+-- CONCERN (flag for Task 10): the focus pattern assumes (a) Badge.OnGainFocus / OnLoseFocus exist
+-- and (b) that these badge widgets actually receive focus events (SetClickable(false) on ALL the
+-- overlay children must not prevent the badge itself from getting focus). Needs in-engine
+-- confirmation. The detail panel may not appear if focus events never fire, OR the HP-number-on-
+-- hover may regress if the inherited handler isn't what shows/hides it. Panel position (-75) and
+-- contents are provisional -- tuned in-engine (Task 10).
+local base_OnGainFocus = Badge.OnGainFocus
+local base_OnLoseFocus = Badge.OnLoseFocus
+
+function PartyBadge:OnGainFocus()
+  if base_OnGainFocus then
+    base_OnGainFocus(self)
+  end
+  if self.detailpanel ~= nil and not self.compact then
+    self.detailpanel:SetString(self:_build_detail_string())
+    self.detailpanel:Show()
+  end
+end
+
+function PartyBadge:OnLoseFocus()
+  if base_OnLoseFocus then
+    base_OnLoseFocus(self)
+  end
+  if self.detailpanel ~= nil then
+    self.detailpanel:Hide()
   end
 end
 
@@ -586,6 +746,10 @@ function PartyBadge:SetPercent(cur, max, penaltypercent)
   if self.num ~= nil then
     self.num:SetString(tostring(math.floor(cur + 0.5)))
   end
+  -- v2026.13 hover detail panel: cache the HP values so _build_detail_string can read them.
+  self._hp_cur = cur
+  self._hp_max = max
+  self._hp_penalty = penaltypercent
   -- honour the centre style's forced-hover-only: the single-writer re-shows the HP number only when
   -- hp_number_always and not _hp_number_was_hover, so a per-refresh SetPercent can't reveal it over the
   -- centre head (cleared by SetAvatarStyle when leaving centre, so corner/off get the number back).
@@ -616,6 +780,15 @@ function PartyBadge:SetStatus(
   freezing,
   sanity_penalty
 )
+  -- v2026.13 hover detail panel: cache the status values so _build_detail_string can read them.
+  self._hunger = hunger_cur
+  self._hunger_max = hunger_max
+  self._sanity = sanity_cur
+  self._sanity_max = sanity_max
+  self._onfire = onfire
+  self._overheating = overheating
+  self._freezing = freezing
+
   -- only update the sub-rings when enabled; the on-fire/overheat/freeze pulse on the main
   -- ring runs regardless (handled below). Sub-ring numbers stay hidden until hover.
   if self.subvisible then
@@ -674,6 +847,8 @@ end
 -- ratescale = RATE_SCALE enum (0 neutral / 1-3 increase / 4-6 decrease). Hidden when neutral
 -- or when the sub-gauges are disabled.
 function PartyBadge:SetSanityRate(ratescale)
+  -- v2026.13 hover detail panel: cache the sanity rate.
+  self._sanity_rate = ratescale
   local anim = (self.subvisible and ratescale ~= nil) and SANITY_RATE_ANIM[ratescale] or nil
   if anim == nil then
     self.sanityarrow:Hide()
@@ -736,6 +911,10 @@ end
 -- show/hide each ring per the danger-band + fast-rate popup rules. Respects the cfg flags set
 -- by SetThermalEnabled. temp==nil -> temp ring stays off (v2 peer backward compat).
 function PartyBadge:SetThermal(temp, temp_rate, moisture, moisture_rate)
+  -- v2026.13 hover detail panel: cache the thermal values so _build_detail_string can read them.
+  self._temp = temp
+  self._moisture = moisture
+
   -- moisture sub-ring --------------------------------------------------------
   if self.show_moisture_cfg and status.moisture_popup(moisture) then
     -- Drive the fill: moisture is 0..100; Badge.SetPercent(fraction, scale_max).
@@ -917,6 +1096,10 @@ function PartyBadge:SetForeign(isforeign, label, sameshard)
       self.foreignlabel:SetHAlign(ANCHOR_MIDDLE)
       self.foreignlabel:SetPosition(0, 50, 0)
       self.foreignlabel:SetColour(0.7, 0.85, 1, 1) -- soft blue marker, fully opaque (it IS the "elsewhere" cue)
+      -- v2026.13: apply the name-size that was set before this label existed (4px smaller than name).
+      if self._name_px ~= nil then
+        self.foreignlabel:SetSize(self._name_px - 4)
+      end
     end
     self.foreignlabel:SetString(sameshard and "far" or (label or "elsewhere"))
     self.foreignlabel:Show()
@@ -937,6 +1120,10 @@ function PartyBadge:HideBadge()
   self.tempbadge:Hide()
   self.temparrow:Hide()
   self.temparrow_cur = nil
+  -- v2026.13: hide the detail panel (a hidden slot shows no hover panel)
+  if self.detailpanel ~= nil then
+    self.detailpanel:Hide()
+  end
   self:Hide()
 end
 
@@ -997,6 +1184,10 @@ function PartyBadge:ShowDead()
   self.hparrow_cur = nil
   -- a dead teammate shows the skull, which is mutually exclusive with the centre/corner avatar.
   self:_HideAvatars()
+  -- v2026.13: hide the detail panel (a dead badge shows no hover panel)
+  if self.detailpanel ~= nil then
+    self.detailpanel:Hide()
+  end
   self.dead:Show()
 end
 
