@@ -148,7 +148,7 @@ local _foreign_stale_logged = false -- log-once when we start hiding stale forei
 -- converts the bucket back to -1/0/1), matching the busted-tested status.temp_popup signature.
 local TEMP_NETVAR_OFFSET = 20
 local TEMP_RATE_DELTA = 1 -- per-0.5s-tick |delta| to count as warming/cooling; provisional, tuned in-engine
-local MOISTURE_RATE_DELTA = 1 -- ditto for moisture; provisional
+local MOISTURE_RATE_DELTA = 0.3 -- per-0.5s-tick |delta| to count as wetter/drier; lowered from 1 to catch light rain; provisional, tuned in-engine
 local function clamp_byte(n)
   if n < 0 then
     return 0

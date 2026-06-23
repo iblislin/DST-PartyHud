@@ -54,9 +54,6 @@ local NAME_PX = { small = 16, medium = 20, large = 26 }
 local SUB_SCALE = 0.5
 local SUB_Y = -42
 local SUB_X = 17
--- v2026.13 top sub-ring row (moisture left / temperature right), placed ABOVE the HP ring centre,
--- tucked against it, clearing the name label (y≈40) and the corner avatar. PROVISIONAL — tuned in-engine.
-local SUB_Y_TOP = 20
 
 -- v2026.11 corner avatar: a small flat head inset in the badge's top-LEFT corner so it does not collide
 -- with the HP number (centre) or the sub-rings (bottom). Scale + offset visually tuned to sit just
@@ -118,18 +115,12 @@ local PartyBadge = Class(Badge, function(self, owner)
   self.sanityarrow:Hide()
   self.sanityarrow_cur = nil
 
-  -- v2026.13 moisture sub-ring (blue), top-LEFT above the HP ring centre.
-  -- Mirrors the vanilla moisturemeter look via OverrideSymbol("icon","status_wet","icon").
-  -- Constructed with iconbuild nil (no separate icon atlas build; the symbol override below supplies
-  -- the water-drop icon from the status_wet build). PROVISIONAL position tuned in-engine.
-  self.moisturebadge = self:AddChild(Badge(nil, owner, MOISTURE_TINT, nil, nil, nil, true))
+  -- v2026.13 moisture sub-ring (blue), bottom-left, hugging the hunger sub-ring.
+  -- Droplet icon comes from the status_wet iconbuild (same as hunger/sanity pattern);
+  -- Badge._ctor calls circleframe:GetAnimState():OverrideSymbol("icon", iconbuild, "icon").
+  self.moisturebadge = self:AddChild(Badge(nil, owner, MOISTURE_TINT, "status_wet", nil, nil, true))
   self.moisturebadge:SetScale(SUB_SCALE)
-  self.moisturebadge:SetPosition(-SUB_X, SUB_Y_TOP, 0)
-  -- Override the icon symbol with the vanilla water-drop from the status_wet build (the build that
-  -- ships with DST; same one the vanilla moisturemeter uses for its icon glyph). NEEDS in-engine
-  -- verification: if status_wet is not pre-loaded in this context, the symbol override may be a
-  -- no-op until the asset is loaded. Flag for Task 10.
-  self.moisturebadge.anim:GetAnimState():OverrideSymbol("icon", "status_wet", "icon")
+  self.moisturebadge:SetPosition(-SUB_X - 6, SUB_Y + 26, 0) -- bottom-left, hugging just up-and-left of the hunger sub-ring; PROVISIONAL, tuned in-engine
   self.moisturebadge:Hide()
 
   -- moisture rate arrow, parented to the sub-ring's underNumber (same pattern as sanityarrow).
@@ -150,7 +141,7 @@ local PartyBadge = Class(Badge, function(self, owner)
   -- PROVISIONAL position tuned in-engine.
   self.tempbadge = self:AddChild(Badge(nil, owner, TEMP_TINT, "temperature_meter", nil, nil, true))
   self.tempbadge:SetScale(SUB_SCALE)
-  self.tempbadge:SetPosition(SUB_X, SUB_Y_TOP, 0)
+  self.tempbadge:SetPosition(SUB_X + 6, SUB_Y + 26, 0) -- bottom-right, hugging the sanity sub-ring (symmetric); PROVISIONAL, tuned in-engine
   self.tempbadge:Hide()
 
   -- temperature rate arrow, parented to the sub-ring's underNumber (same pattern as sanityarrow).
