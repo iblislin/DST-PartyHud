@@ -215,4 +215,25 @@ function M.badge_treatment(rec_origin, my_shard, is_cave)
   return false, M.foreign_label(is_cave)
 end
 
+-- v2026.13: should a foreign (carrier-blob) record be DRAWN this refresh? Pure dedup decision used by
+-- modmain's foreign render loop. Three suppression rules, else draw:
+--   * an unkeyed record (nil/"" userid) is drawn (preserves the pre-v2026.13 behaviour -- the old
+--     guard only skipped a record whose userid was already in local_userids).
+--   * a userid already shown as a LOCAL entity is suppressed (a local entity always wins).
+--   * YOUR OWN userid is suppressed when skip_self is on -- the server stamps every local player,
+--     including you, into the broadcast, so without this your badge re-appears as a dimmed "far" one
+--     (the long-standing "Skip own badge doesn't work while cross-shard is on" bug).
+function M.foreign_should_draw(rec_userid, local_userids, skip_self, my_userid)
+  if rec_userid == nil or rec_userid == "" then
+    return true
+  end
+  if local_userids[rec_userid] then
+    return false
+  end
+  if skip_self and my_userid ~= nil and my_userid ~= "" and rec_userid == my_userid then
+    return false
+  end
+  return true
+end
+
 return M

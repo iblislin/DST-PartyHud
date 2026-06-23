@@ -401,6 +401,29 @@ GLOBAL.PartyHud_Layout = function(n)
 end
 -- luacheck: pop
 
+-- [DEBUG/util] runtime "Show Your Own Badge" toggle from the client console, no reconnect needed:
+--   PartyHud_SkipSelf()      -> toggle skip-self on/off
+--   PartyHud_SkipSelf(true)  -> Skip (hide your own badge);  PartyHud_SkipSelf(false) -> Show it
+-- Reassigns the `skip_self` upvalue (UpdateBadges recomputes visible_cap, re-reads it in the local
+-- pass, and passes it to crossshard.foreign_should_draw each refresh) and refreshes the live badges.
+-- Client-only (no-op on a dedicated server: ThePlayer nil). Returns the new skip_self value. Added to
+-- smoke the v2026.13 skip-self fix live; mirrors PartyHud_Layout.
+-- luacheck: push ignore 122
+GLOBAL.PartyHud_SkipSelf = function(v)
+  if v == nil then
+    skip_self = not skip_self
+  else
+    skip_self = v and true or false
+  end
+  local p = _G.ThePlayer
+  if p ~= nil and p.UpdateBadges ~= nil then
+    p.UpdateBadges()
+  end
+  print("[PartyHud] skip_self = " .. tostring(skip_self))
+  return skip_self
+end
+-- luacheck: pop
+
 -- [DEBUG/util] runtime avatar-style switch from the client console, no reconnect needed:
 --   PartyHud_AvatarStyle("off"|"corner"|"centre")  -> set the style and relayout the live badges
 -- Validates the input string against the 3 known values and passes it straight to SetAvatarStyle (an
@@ -806,7 +829,8 @@ local function onstatusdisplaysconstruct(self)
           break
         end
         -- a local entity always wins: never double-draw a userid already shown as local.
-        if not (rec.userid ~= nil and local_userids[rec.userid]) then
+        -- v2026.13: also suppresses ThePlayer's own record when skip_self is on.
+        if crossshard.foreign_should_draw(rec.userid, local_userids, skip_self, me ~= nil and me.userid or nil) then
           local b = self.badgearray[slot]
           if b == nil then
             break

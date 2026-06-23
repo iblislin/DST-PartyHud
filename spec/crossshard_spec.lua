@@ -502,4 +502,63 @@ describe("partyhud crossshard store", function()
       assert.are.equal("Caves", label)
     end)
   end)
+
+  -- ------------------------------------------------------------------
+  describe("foreign_should_draw", function()
+    it("draws a normal foreign player not shown locally", function()
+      assert.is_true(store.foreign_should_draw("KU_other", {}, false, "KU_me"))
+    end)
+    it("suppresses a player already rendered as a local entity", function()
+      assert.is_false(store.foreign_should_draw("KU_other", { KU_other = true }, false, "KU_me"))
+    end)
+    it("suppresses YOUR OWN record arriving via the carrier blob when skip_self is on (the bug)", function()
+      assert.is_false(store.foreign_should_draw("KU_me", {}, true, "KU_me"))
+    end)
+    it("draws your own record when skip_self is off (show own badge)", function()
+      assert.is_true(store.foreign_should_draw("KU_me", {}, false, "KU_me"))
+    end)
+    it("draws an unkeyed (nil/empty userid) record -- preserves prior behaviour", function()
+      assert.is_true(store.foreign_should_draw(nil, {}, true, "KU_me"))
+      assert.is_true(store.foreign_should_draw("", {}, true, "KU_me"))
+    end)
+    it("a local-dedup hit wins even for your own userid (skip_self off)", function()
+      assert.is_false(store.foreign_should_draw("KU_me", { KU_me = true }, false, "KU_me"))
+    end)
+    it("nil my_userid never self-suppresses", function()
+      assert.is_true(store.foreign_should_draw("KU_me", {}, true, nil))
+    end)
+  end)
+
+  -- v2026.13: the foreign render loop calls foreign_should_draw (the dedup/skip-self guard) BEFORE
+  -- badge_treatment (the far / Caves / Surface label), and foreign_should_draw is origin-agnostic
+  -- (userid only). So your OWN record is dropped whatever label it WOULD have gotten. These tie the
+  -- two pure fns together to prove the skip-self fix covers "far", "Caves", AND "Surface" -- not just
+  -- "far" -- while a real teammate on the other shard is still drawn + labelled.
+  describe("foreign_should_draw vs badge_treatment -- own record suppressed under every shard label", function()
+    local MY = "KU_me"
+    it("a would-be 'far' (same-shard origin) own record is suppressed by skip_self", function()
+      local same_shard, label = store.badge_treatment(1, 1, false) -- origin == my_shard
+      assert.is_true(same_shard) -- WOULD be the "far" branch
+      assert.is_nil(label)
+      assert.is_false(store.foreign_should_draw(MY, {}, true, MY)) -- ...but dropped first
+    end)
+    it("a would-be 'Caves' (cross-shard, you on the surface) own record is suppressed by skip_self", function()
+      local same_shard, label = store.badge_treatment(2, 1, false) -- origin 2 != my_shard 1, not in cave
+      assert.is_false(same_shard)
+      assert.are.equal("Caves", label) -- WOULD be labelled "Caves"
+      assert.is_false(store.foreign_should_draw(MY, {}, true, MY)) -- ...but dropped first
+    end)
+    it("a would-be 'Surface' (cross-shard, you in the caves) own record is suppressed by skip_self", function()
+      local same_shard, label = store.badge_treatment(1, 2, true) -- origin 1 != my_shard 2, you ARE in cave
+      assert.is_false(same_shard)
+      assert.are.equal("Surface", label) -- WOULD be labelled "Surface"
+      assert.is_false(store.foreign_should_draw(MY, {}, true, MY)) -- ...but dropped first
+    end)
+    it("a real Caves TEAMMATE (different userid) is still drawn while skip_self is on", function()
+      local same_shard, label = store.badge_treatment(2, 1, false)
+      assert.is_false(same_shard)
+      assert.are.equal("Caves", label) -- the teammate keeps the "Caves" label
+      assert.is_true(store.foreign_should_draw("KU_mate", {}, true, MY)) -- not you -> drawn
+    end)
+  end)
 end)
