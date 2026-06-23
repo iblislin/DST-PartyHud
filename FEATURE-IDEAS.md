@@ -179,4 +179,34 @@ DST 每個角色除了血/餓/智三圍,還各有一條**獨門機制條**。這
 
 ---
 
+## 7. 設定頁 / 介面 QoL(雜項)
+
+### modinfo 設定頁多語言(zh-TW 本地化,英文預設)  ✅
+
+- **是什麼**:`modinfo.lua` 的 `configuration_options` 依遊戲語言顯示對應的 `label`、`hover`、選項 `description`(繁體中文 / 英文預設)。`name` 與 `data` 不翻(它們是設定 key / 存檔值,必須穩定)。
+- **為什麼**:台灣玩家把 Steam 設成繁中後,mod 設定頁仍只有英文;翻譯後一眼可讀。
+- **靈感**:DST 社群 mod 2621090176、831523966 都用同一機制做 modinfo 多語言。
+- **價值 high / 工時 low**(純 modinfo,無 runtime 程式碼、無 codec 影響;純 client 顯示)。
+- **DST 限制 / 實作提示**:
+  - **機制**:`scripts/modindex.lua` 的 `ModIndex:InitializeModInfo()`(約 line 593)在執行 modinfo.lua 前,把 `locale = LOC.GetLocaleCode()` 與 `ChooseTranslationTable(tbl)`(回傳 `tbl[locale] or tbl[1]`)注入 sandbox 環境。Klei 官方行為,等同 modinfo 內的全域。
+  - **繁中 locale code = `"zht"`**(`scripts/languages/loc.lua`;簡中 Steam=`"zh"`、WeGame=`"zhr"`)。
+  - **最精簡 idiom**(比 `ChooseTranslationTable` 更常見):
+    ```lua
+    local function T(en, zht) return locale == "zht" and zht or en end
+    configuration_options = {
+      { name = "layout",                         -- key,不翻
+        label = T("HUD Layout", "版面配置"),
+        hover = T("Choose the layout", "選擇版面方向"),
+        options = {
+          { description = T("Horizontal", "水平"), data = 1 },   -- data,不翻
+          { description = T("Vertical",   "垂直"), data = 2 },
+        }, default = 2, client = true },
+    }
+    ```
+  - **免重啟**:`modsscreen.lua` 每次開啟 mods 頁會 `KnownModIndex:UpdateModInfo()` 重評 modinfo,所以切語言後重開設定頁即更新(不需重啟遊戲)。
+  - **字型**:DST 字型皆有 `FALLBACK_FONT`(`fonts.lua`),CJK 自動以 fallback 繪製,modinfo 端無需特別處理。
+  - **注意**:`locale` 在 sandbox 中已是全域(非 nil)可直接讀;dedicated server 語言來自 cluster 設定(通常 `"en"`),但設定頁是 client 端渲染,以玩家本機語言為準。我們現有所有 `name`/`data` 都已是穩定 key/int,翻譯只動顯示字串,零行為風險。研究來源:背景 research subagent(2026-06-24,核對 live 遊戲 scripts bundle + 2 個實際 workshop mod)。
+
+---
+
 *相關:跨 shard 的技術設計見 memory `partyhud-v2026-8-crossshard-research`;視覺實作前跑 `.claude/skills/dst-badge-visual-audit`。*
