@@ -722,7 +722,8 @@ local function onstatusdisplaysconstruct(self)
           break
         end
         -- a local entity always wins: never double-draw a userid already shown as local.
-        if not (rec.userid ~= nil and local_userids[rec.userid]) then
+        -- v2026.13: also suppresses ThePlayer's own record when skip_self is on.
+        if crossshard.foreign_should_draw(rec.userid, local_userids, skip_self, me ~= nil and me.userid or nil) then
           local b = self.badgearray[slot]
           if b == nil then
             break
