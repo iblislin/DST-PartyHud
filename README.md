@@ -52,6 +52,9 @@ A modernized fork of [PartyHUD](https://github.com/brianchenito/PartyHud) by **b
 - New per-player option **Colour Teammate Names** — tint each name in that player's own colour (default on).
 - **Fixed:** a **far / cross-shard teammate's badge could vanish while they sat idle** (a data-staleness false positive); badges now stay put.
 
+### Fixed in 2026.13
+- **"Show Your Own Badge: Skip" now actually hides your badge.** With cross-shard teammates enabled (the default), your own badge used to reappear as a dimmed "far" badge even after you chose to skip it — your record arrives over the always-replicated cross-shard broadcast, and the skip only applied to the local pass. It's now suppressed on both. No change if you keep your own badge shown.
+
 ## Install (server mod)
 Subscribe on the Workshop, **or** place this folder into your server's `mods/` as `partyhud` and enable it in each shard's `modoverrides.lua`:
 ```lua
@@ -164,6 +167,13 @@ to work on current Don't Starve Together builds.
     positive); badges now stay put
 [/list]
 
+[b]Fixed in 2026.13[/b]
+[list]
+[*] "Show Your Own Badge: Skip" now actually hides your badge. With cross-shard teammates on (the
+    default), your own badge used to reappear as a dimmed "far" badge — your record arrives over the
+    cross-shard broadcast and the skip only applied to the local pass. Now suppressed on both
+[/list]
+
 [b]Settings (each player picks their own)[/b]
 [list]
 [*] HUD Layout: Horizontal / Vertical
@@ -264,6 +274,13 @@ Thanks for the original work!
     當隊友出現著火 / 過熱 / 失溫 / HP 速率箭頭時,徽章會暫時翻成角落樣式,讓箭頭不被臉擋住
 [*] 新選項 Colour Teammate Names(隊友名字配色)—— 將每個名字染成該玩家自己的顏色(預設開啟)
 [*] 修正:遠距 / 跨-shard 隊友靜止不動時,其徽章可能消失(資料 staleness 誤判);現在徽章會保持顯示
+[/list]
+
+[b]2026.13 修正[/b]
+[list]
+[*] 「Show Your Own Badge:Skip(隱藏自己的徽章)」現在真的會隱藏。開啟跨-shard 隊友(預設)時,你自己的
+    徽章會以變暗的「far」樣式重新出現 —— 你的資料會透過跨-shard 廣播傳來,而原本的隱藏只套用在本地那一輪。
+    現在兩條路徑都會抑制。若你保持顯示自己的徽章則無變化
 [/list]
 
 [b]設定(每位玩家各自選擇)[/b]
