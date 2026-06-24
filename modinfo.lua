@@ -87,17 +87,6 @@ configuration_options = {
     client = true,
   },
   {
-    name = "debug_showall",
-    label = "[Test] Show mock badges",
-    hover = "Fill empty slots with fake teammates to preview the HUD layout. Only you see this; it does not affect other players.",
-    options = {
-      { description = "Off", data = 0 },
-      { description = "On", data = 1 },
-    },
-    default = 0,
-    client = true,
-  },
-  {
     name = "low_hp_alert",
     label = "Low-HP Alert",
     hover = "Blink a red border on a teammate's badge when their HP drops below this level (percent of their max HP). Off disables it.",
@@ -134,3 +123,27 @@ configuration_options = {
     client = true,
   },
 }
+
+-- The "[Test] Show mock badges" option (debug_showall) is DEV-ONLY. A release build's version is a
+-- plain "YYYY.N" (e.g. "2026.13"); dev/beta/rc builds carry a non-numeric suffix (e.g. "2026.14dev2",
+-- "2026.13rc1", "2026.12b1"). On a RELEASE build we OMIT the option entirely, which both:
+--   (1) HIDES it from the mod-config UI, so a player can't enable it by accident (the "mock HUD popup"
+--       complaint = a teammate-less player who toggled this on and saw fake "PlayerN" badges), and
+--   (2) FORCE-DISABLES it even for a player who previously turned it on: GetModConfigData is driven by
+--       the configuration_options list, so an unknown option name returns nil (orphaned saved values
+--       are never resurfaced) -> modmain's `GetModConfigData("debug_showall", true) == 1` is false.
+-- Only dev/beta builds expose it (for our own layout preview). `version` is the global set at the top
+-- of this same modinfo chunk.
+if version:match("^%d+%.%d+$") == nil then
+  configuration_options[#configuration_options + 1] = {
+    name = "debug_showall",
+    label = "[Test] Show mock badges",
+    hover = "Fill empty slots with fake teammates to preview the HUD layout. Only you see this; it does not affect other players.",
+    options = {
+      { description = "Off", data = 0 },
+      { description = "On", data = 1 },
+    },
+    default = 0,
+    client = true,
+  }
+end
