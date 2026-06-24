@@ -134,12 +134,13 @@ local PartyBadge = Class(Badge, function(self, owner)
   self.moisturearrow:Hide()
   self.moisturearrow_cur = nil
 
-  -- v2026.13 temperature sub-ring (white base tint; tinted cyan or red-orange per kind via
-  -- SetMultColour in SetThermal), top-RIGHT above the HP ring centre.
-  -- Uses the temperature_meter build for the icon. NEEDS in-engine verification: if
-  -- temperature_meter is the correct build name for the DST thermometer asset, verify in Task 10.
-  -- PROVISIONAL position tuned in-engine.
-  self.tempbadge = self:AddChild(Badge(nil, owner, TEMP_TINT, "temperature_meter", nil, nil, true))
+  -- v2026.14 temperature sub-ring (white base ring; tinted cyan/red-orange per kind via SetMultColour
+  -- in SetThermal), bottom-right hugging the sanity sub-ring. NO icon build: DST has no thermometer
+  -- "icon" symbol (the `temperature_meter` build is an item fill-gauge with an "idle" anim, not an
+  -- "icon" symbol -- the old OverrideSymbol was a silent no-op; no stock build carries a temp icon, and
+  -- Combined Status likewise shows temperature as a plain number, no icon). So iconbuild = nil; the
+  -- cyan/red ring tint + the `N°` hover-panel text convey temperature. PROVISIONAL position, tuned in-engine.
+  self.tempbadge = self:AddChild(Badge(nil, owner, TEMP_TINT, nil, nil, nil, true))
   self.tempbadge:SetScale(SUB_SCALE)
   self.tempbadge:SetPosition(SUB_X + 6, SUB_Y + 26, 0) -- bottom-right, hugging the sanity sub-ring (symmetric); PROVISIONAL, tuned in-engine
   self.tempbadge:Hide()
