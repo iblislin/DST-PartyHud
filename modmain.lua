@@ -89,6 +89,23 @@ local last_bpmode = -1 -- client-local: last applied backpack UI mode (see backp
 -- SetAvatarStyle. resolve_avatar_style maps nil/this int -> "off"/"corner"/"centre".
 local current_avatar_style = avatar_style_cfg
 
+-- v2026.x mod-aware layout: Combined Status (Workshop 376333686) rescales topright_root, drifting our
+-- right-anchored vertical column. Detect it at load (KnownModIndex is populated by mod-load time) so
+-- layout_badges can read the live scale + compensate. Nil-guarded: any failure -> false -> no compensation.
+local HAS_COMBINED_STATUS = false
+do
+  local kmi = GLOBAL.KnownModIndex
+  if kmi ~= nil and kmi.IsModEnabled ~= nil then
+    local ok, enabled = GLOBAL.pcall(function()
+      return kmi:IsModEnabled("workshop-376333686")
+    end)
+    HAS_COMBINED_STATUS = (ok and enabled) and true or false
+  end
+end
+-- in-engine residual multiplier for the CS X-compensation (1.0 = use the analytic value as-is); tunable
+-- live via PartyHud_CSFudge for fine alignment. Read by layout_badges, passed into compute_badge_positions.
+local CS_FUDGE = 1.0
+
 --imports partybadge
 local phud_custombadge = _G.require("widgets/partybadge")
 local phud_xpos
@@ -294,6 +311,33 @@ local function layout_badges(badgearray)
   if GLOBAL.TheFrontEnd ~= nil and GLOBAL.TheFrontEnd.GetHUDScale ~= nil then
     hudscale = GLOBAL.TheFrontEnd:GetHUDScale() or 1
   end
+  -- mod-aware: when Combined Status (or any mod) rescales topright_root, read the live deviation factor
+  -- F = topright_root_scale / hudscale so compute_badge_positions can re-anchor. Walk badge -> statusdisplays
+  -- (badge.parent) -> sidepanel (.parent) -> topright_root (.parent). Defensive: any nil / unreadable scale
+  -- -> cs_factor nil -> no compensation (current behaviour). Widget:GetScale() returns a Vector3 (the
+  -- COMPOUND world-space scale = the widget's own UITransform scale * its ancestors'); we take .x. For
+  -- topright_root the only ancestor is the unscaled screen root, so .x equals topright_root's effective
+  -- scale (= GetHUDScale() * CS's HUDSCALEFACTOR under Combined Status); dividing by hudscale yields the
+  -- CS factor. (If a future mod ALSO rescales an ancestor of topright_root, the compound scale absorbs
+  -- that too -- acceptable, we compensate for any ancestor-chain rescale, not only CS.) The parent chain:
+  -- badge (our partybadge) -> statusdisplays -> sidepanel -> topright_root.
+  local cs_factor = nil
+  if HAS_COMBINED_STATUS and badgearray[1] ~= nil then
+    local sd = badgearray[1].parent
+    local sidepanel = sd ~= nil and sd.parent or nil
+    local topright = sidepanel ~= nil and sidepanel.parent or nil
+    if topright ~= nil and topright.GetScale ~= nil and hudscale ~= nil and hudscale > 0 then
+      local ok, s = GLOBAL.pcall(function()
+        return topright:GetScale()
+      end)
+      if ok and s ~= nil then
+        local sx = (type(s) == "number") and s or s.x
+        if sx ~= nil and sx > 0 then
+          cs_factor = sx / hudscale
+        end
+      end
+    end
+  end
   -- v2026.8: an equipped backpack overlaps our HUD differently per UI mode (see backpack_layout_mode):
   --  * Mode A (1, side/floating): its container hugs the right screen edge over our badges -> shift ALL
   --    columns LEFT. That moves col 0 off the Map(M) button, so col 0 then uses the small `free` reserve
@@ -326,6 +370,8 @@ local function layout_badges(badgearray)
     backpack_shift_x = BACKPACK_SHIFT_X,
     backpack_bottom_extra = BACKPACK_BOTTOM_EXTRA,
     horizontal_step = -70, -- per-badge x step in the horizontal row
+    cs_factor = cs_factor,
+    cs_fudge = CS_FUDGE,
   }
   local positions = layoutmath.compute_badge_positions(opts)
   for _, p in ipairs(positions) do
@@ -369,6 +415,22 @@ GLOBAL.PartyHud_Layout = function(n)
   end
   print("[PartyHud] layout = " .. tostring(layout) .. (layout == 2 and " (Vertical)" or " (Horizontal)"))
   return layout
+end
+-- luacheck: pop
+
+-- [DEBUG/util] tune the Combined-Status X re-anchor residual multiplier live (no reconnect). 1.0 = the
+-- analytic compensation as-is; nudge if the column still isn't flush with the border under CS. Relayouts
+-- the live badges. Client-only. Returns the new fudge.
+-- luacheck: push ignore 122
+GLOBAL.PartyHud_CSFudge = function(f)
+  CS_FUDGE = f or 1.0
+  local p = _G.ThePlayer
+  local sd = p ~= nil and p.HUD ~= nil and p.HUD.controls ~= nil and p.HUD.controls.status or nil
+  if sd ~= nil and sd.badgearray ~= nil then
+    layout_badges(sd.badgearray)
+  end
+  print("[PartyHud] CS X-fudge = " .. tostring(CS_FUDGE))
+  return CS_FUDGE
 end
 -- luacheck: pop
 

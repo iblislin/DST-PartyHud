@@ -10,6 +10,28 @@ M.MAX_PROP = 1.25 -- MAX_HUD_SCALE upscale cap
 M.BADGE_BOTTOM = 60 -- a badge's sub-ring bottom, below its origin
 M.PERCOL_FALLBACK = 6 -- safe per-column count if screen/HUD scale is unreadable
 
+-- Vanilla widget-tree constants between topright_root and our badges (sidepanel local x, statusdisplays
+-- scale). CS doesn't change these -- it only rescales topright_root -- so they're stable; the cs_fudge
+-- multiplier (set in modmain) absorbs any residual if a layout deviates (e.g. splitscreen).
+M.CS_SIDEPANEL_X = -80
+M.CS_SD_SCALE = 1.4
+
+-- Re-anchor the vertical column's start-x when an ancestor (topright_root) is rescaled by `factor`
+-- relative to the vanilla HUD scale (factor = live topright_root_scale / GetHUDScale(); 1 = vanilla / no
+-- rescaling mod). Keeps the column at the same SCREEN x it would have at factor 1, so a mod like Combined
+-- Status that rescales topright_root no longer drifts our right-anchored column off the border. `fudge`
+-- (default 1) is an in-engine residual multiplier. factor nil / <= 0 / == 1 -> returned unchanged (CS
+-- absent, unreadable scale, or vanilla scale -> no compensation). Pure; busted-tested.
+-- NOTE: the topright_root rescale also drifts the column's Y; that compensation is DEFERRED to an
+-- in-engine visual-tuning pass (X only here).
+function M.cs_compensated_vstartx(vstartx, factor, fudge)
+  if factor == nil or factor <= 0 or factor == 1 then
+    return vstartx
+  end
+  local base = M.CS_SIDEPANEL_X / M.CS_SD_SCALE + vstartx
+  return vstartx + (1 / factor - 1) * base * (fudge or 1)
+end
+
 -- badges that fit in one column given screen geometry. >= 1 (or PERCOL_FALLBACK if screen/scale
 -- unreadable). vgap is the NEGATIVE row gap (rows go down); bottom_reserve is the bottom keep-out.
 -- Dividing by `prop` is the v2026.8 proportional-scale fix: a sub-720 window shrinks the real badges,
@@ -136,6 +158,11 @@ function M.compute_badge_positions(opts)
     vstartx, vstarty = opts.phud_xpos, opts.phud_ypos
   end
   local vgap = opts.show_substatus and opts.vert_gap or opts.vert_gap_compact
+  -- mod-aware re-anchor (Combined Status etc. rescale topright_root -> our column drifts); no-op when
+  -- opts.cs_factor is nil (CS absent / scale unreadable) or 1 (vanilla scale).
+  if opts.cs_factor ~= nil then
+    vstartx = M.cs_compensated_vstartx(vstartx, opts.cs_factor, opts.cs_fudge)
+  end
   local bpmode = opts.bpmode
   if bpmode == 1 then
     vstartx = vstartx - opts.backpack_shift_x

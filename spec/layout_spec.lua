@@ -307,4 +307,43 @@ describe("partyhud layout math", function()
       assert.are.same({ index = 4, x = -80, y = -130, col = 1, row = 0 }, r[4])
     end)
   end)
+
+  describe("cs_compensated_vstartx", function()
+    local function r2(x)
+      return math.floor(x * 100 + 0.5) / 100
+    end
+    it("factor 1 / nil / <=0 -> unchanged (no compensation)", function()
+      assert.are.equal(0, M.cs_compensated_vstartx(0, 1))
+      assert.are.equal(0, M.cs_compensated_vstartx(0, nil))
+      assert.are.equal(-100, M.cs_compensated_vstartx(-100, 0))
+      assert.are.equal(-100, M.cs_compensated_vstartx(-100, -0.5))
+    end)
+    it("factor 1.25 (cluster scaled up) shifts Standard anchor (vstartx 0) RIGHT (+)", function()
+      -- base = -80/1.4 + 0 = -57.142...; (1/1.25 - 1) = -0.2; delta = -0.2 * -57.142 = +11.43
+      assert.are.equal(11.43, r2(M.cs_compensated_vstartx(0, 1.25)))
+    end)
+    it("factor 0.75 (cluster scaled down) shifts Standard anchor LEFT (-)", function()
+      -- (1/0.75 - 1) = 0.3333; delta = 0.3333 * -57.142 = -19.05
+      assert.are.equal(-19.05, r2(M.cs_compensated_vstartx(0, 0.75)))
+    end)
+    it("fudge multiplies the correction", function()
+      assert.are.equal(22.86, r2(M.cs_compensated_vstartx(0, 1.25, 2)))
+    end)
+    it("non-zero vstartx (Minimap anchor) is included in the base", function()
+      -- base = -57.142 + (-100) = -157.142; (1/1.25-1)=-0.2; delta=+31.43; result = -100 + 31.43 = -68.57
+      assert.are.equal(-68.57, r2(M.cs_compensated_vstartx(-100, 1.25)))
+    end)
+    it("screen-x INVARIANCE: compensated column lands at the SAME screen x as vanilla (factor 1), any F", function()
+      -- screen offset-from-right of the column start for a given statusdisplays-local x + rescale factor.
+      local function screen_offset(local_x, factor)
+        return factor * (M.CS_SIDEPANEL_X + M.CS_SD_SCALE * local_x)
+      end
+      for _, F in ipairs({ 0.5, 0.75, 1.1, 1.25, 1.5 }) do
+        for _, vanilla_vstartx in ipairs({ 0, -100, -650 }) do -- Standard, Minimap, Minimap-XL anchors
+          local comp = M.cs_compensated_vstartx(vanilla_vstartx, F)
+          assert.are.equal(r2(screen_offset(vanilla_vstartx, 1)), r2(screen_offset(comp, F)))
+        end
+      end
+    end)
+  end)
 end)
