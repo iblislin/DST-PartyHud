@@ -312,44 +312,57 @@ describe("partyhud layout math", function()
     local function r2(x)
       return math.floor(x * 100 + 0.5) / 100
     end
-    -- Real widget tree (controls.lua non-splitscreen):
-    --   tr_scale_root [hudscale * CS_factor]
-    --   └── sidepanel [pos=(-80,-60,0), scale=1]
-    --       └── StatusDisplays [pos=(0,-110,0), scale=1]
-    --           └── badge [vstartx]
-    -- screen_x = anchor + factor * (CS_SIDEPANEL_X + vstartx)
-    -- base = CS_SIDEPANEL_X + vstartx = -80 + vstartx
-    it("factor 1 / nil / <=0 -> unchanged (no compensation)", function()
-      assert.are.equal(0, M.cs_compensated_vstartx(0, 1))
+    -- Invariance: factor * (cs_sp_x + comp) = CS_SIDEPANEL_X + vstartx
+    -- → comp = (CS_SIDEPANEL_X + vstartx) / factor - cs_sp_x
+    -- cs_sp_x=nil defaults to CS_SIDEPANEL_X (vanilla sidepanel; only scale compensation)
+    -- cs_sp_x=-100 = CS case (CS moves sidepanel from -80 to -100)
+    it("factor nil / <=0 -> unchanged", function()
       assert.are.equal(0, M.cs_compensated_vstartx(0, nil))
       assert.are.equal(-100, M.cs_compensated_vstartx(-100, 0))
       assert.are.equal(-100, M.cs_compensated_vstartx(-100, -0.5))
     end)
-    it("factor 1.25 (CS scales up) shifts Standard anchor (vstartx 0) RIGHT (+)", function()
-      -- base = -80 + 0 = -80; (1/1.25 - 1) = -0.2; delta = -0.2 * -80 = +16
-      assert.are.equal(16, r2(M.cs_compensated_vstartx(0, 1.25)))
+    it("factor 1 + vanilla sp_x (nil) -> unchanged (no CS effect)", function()
+      assert.are.equal(0, M.cs_compensated_vstartx(0, 1))
+      assert.are.equal(-100, M.cs_compensated_vstartx(-100, 1))
     end)
-    it("factor 0.75 (CS scales down) shifts Standard anchor LEFT (-)", function()
-      -- base = -80 + 0 = -80; (1/0.75 - 1) = 0.3333; delta = 0.3333 * -80 = -26.67
-      assert.are.equal(-26.67, r2(M.cs_compensated_vstartx(0, 0.75)))
+    it("factor 1 + CS sp_x (-100) -> compensates +20 for sidepanel shift alone", function()
+      -- CS moves sidepanel -80 -> -100 even at HUDSCALEFACTOR=1
+      -- target = (-80 + 0)/1 - (-100) = 20; result = 0 + 20 = 20
+      assert.are.equal(20, r2(M.cs_compensated_vstartx(0, 1, -100)))
     end)
-    it("fudge multiplies the correction", function()
-      -- base = -80; (1/1.25-1)=-0.2; delta*fudge2 = -0.2*-80*2 = 32
-      assert.are.equal(32, r2(M.cs_compensated_vstartx(0, 1.25, 2)))
+    it("factor 1.25 + vanilla sp_x: scale only compensation", function()
+      -- target = (-80+0)/1.25 - (-80) = -64+80 = 16
+      assert.are.equal(16, r2(M.cs_compensated_vstartx(0, 1.25, -80)))
     end)
-    it("non-zero vstartx (Minimap anchor) is included in the base", function()
-      -- base = -80 + (-100) = -180; (1/1.25-1)=-0.2; delta=+36; result = -100 + 36 = -64
-      assert.are.equal(-64, r2(M.cs_compensated_vstartx(-100, 1.25)))
+    it("factor 1.25 + CS sp_x (-100): scale + position compensation", function()
+      -- target = (-80+0)/1.25 - (-100) = -64+100 = 36
+      assert.are.equal(36, r2(M.cs_compensated_vstartx(0, 1.25, -100)))
     end)
-    it("screen-x INVARIANCE: compensated column lands at the SAME screen x as vanilla (factor 1), any F", function()
-      -- screen offset-from-right: factor * (CS_SIDEPANEL_X + vstartx); statusdisplays scale=1 in non-splitscreen
-      local function screen_offset(local_x, factor)
-        return factor * (M.CS_SIDEPANEL_X + local_x)
+    it("factor 0.75 + vanilla sp_x: scale compensation LEFT", function()
+      -- target = (-80+0)/0.75 - (-80) = -106.67+80 = -26.67
+      assert.are.equal(-26.67, r2(M.cs_compensated_vstartx(0, 0.75, -80)))
+    end)
+    it("fudge scales the correction", function()
+      -- factor=1.25, cs_sp_x=-80: target=16, delta=16; fudge=2 -> 0+16*2=32
+      assert.are.equal(32, r2(M.cs_compensated_vstartx(0, 1.25, -80, 2)))
+    end)
+    it("non-zero vstartx (Minimap anchor)", function()
+      -- factor=1.25, cs_sp_x=-100: target=(-80-100)/1.25-(-100)=-144+100=-44; result=-100+56=-44
+      assert.are.equal(-44, r2(M.cs_compensated_vstartx(-100, 1.25, -100)))
+    end)
+    it("screen-x INVARIANCE: compensated column lands at SAME screen x as vanilla, any F and cs_sp_x", function()
+      local function screen_x_vanilla(vstartx)
+        return M.CS_SIDEPANEL_X + vstartx
       end
-      for _, F in ipairs({ 0.5, 0.75, 1.1, 1.25, 1.5 }) do
-        for _, vanilla_vstartx in ipairs({ 0, -100, -650 }) do -- Standard, Minimap, Minimap-XL anchors
-          local comp = M.cs_compensated_vstartx(vanilla_vstartx, F)
-          assert.are.equal(r2(screen_offset(vanilla_vstartx, 1)), r2(screen_offset(comp, F)))
+      local function screen_x_cs(vstartx, factor, cs_sp_x)
+        return factor * (cs_sp_x + vstartx)
+      end
+      for _, F in ipairs({ 0.75, 1.0, 1.1, 1.25, 1.5 }) do
+        for _, csx in ipairs({ -80, -100 }) do -- vanilla sp_x and CS sp_x
+          for _, vanilla_vstartx in ipairs({ 0, -100, -650 }) do
+            local comp = M.cs_compensated_vstartx(vanilla_vstartx, F, csx)
+            assert.are.equal(r2(screen_x_vanilla(vanilla_vstartx)), r2(screen_x_cs(comp, F, csx)))
+          end
         end
       end
     end)

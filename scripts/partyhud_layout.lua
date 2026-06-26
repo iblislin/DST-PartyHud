@@ -13,27 +13,35 @@ M.PERCOL_FALLBACK = 6 -- safe per-column count if screen/HUD scale is unreadable
 -- Real vanilla widget tree (non-splitscreen, controls.lua verified):
 --   Widget("side")  [SCALEMODE_PROPORTIONAL]
 --   └── tr_scale_root ("tr_scale_root")  [SetScale(hudscale) in SetHUDSize; = self.topright_root]
---       └── sidepanel ("sidepanel")  [pos=(-80,-60,0), scale=(1,1,1)]
+--       └── sidepanel ("sidepanel")  [vanilla pos=(-80,-60,0); CS moves to (-100,-70,0)]
 --           └── StatusDisplays  [pos=(0,-110,0), no SetScale → local scale=1]
 --               └── our badge
--- CS rescales tr_scale_root via its own SetHUDSize override → scale = hudscale × CS_HUDSCALEFACTOR.
--- cs_factor = tr_scale_root local scale / GetHUDScale() = CS_HUDSCALEFACTOR.
--- Widget("side") carries a SCALEMODE_PROPORTIONAL engine scale that is NOT part of the CS effect;
--- GetScale() (compound) would absorb it. Use GetLooseScale() (local UITransform only) on tr_scale_root.
-M.CS_SIDEPANEL_X = -80 -- sidepanel local X inside tr_scale_root (controls.lua:135 SetPosition(-80,-60,0))
+-- CS makes TWO changes (Combined-Status/modmain.lua verified):
+--   1. self.topright_root:SetScale(GetHUDScale() * HUDSCALEFACTOR)  → cs_factor = HUDSCALEFACTOR
+--   2. self.sidepanel:SetPosition(-100, -70)                        → sidepanel moves left by 20
+-- cs_factor = tr_scale_root UITransform:GetScale() / GetHUDScale() = HUDSCALEFACTOR.
+-- cs_sp_x   = live sidepanel UITransform:GetLocalPosition().x  (= -80 vanilla, -100 with CS).
+-- Widget("side") carries a SCALEMODE_PROPORTIONAL engine scale; use UITransform:GetScale() (local)
+-- not Widget:GetScale() (compound) on tr_scale_root to avoid absorbing it into cs_factor.
+M.CS_SIDEPANEL_X = -80 -- sidepanel local X vanilla (controls.lua:135 SetPosition(-80,-60,0))
 
--- Re-anchor the vertical column's start-x when tr_scale_root (= topright_root) is rescaled by `factor`
--- relative to vanilla (factor = tr_scale_root GetLooseScale / GetHUDScale(); 1 = no rescaling).
--- Screen-x model (non-splitscreen): screen_x = anchor + factor*hudscale * (CS_SIDEPANEL_X + vstartx).
--- Invariance: comp_vstartx s.t. factor * (CS_SIDEPANEL_X + comp_vstartx) = 1 * (CS_SIDEPANEL_X + vstartx).
--- factor nil / <= 0 / == 1 -> unchanged. Pure; busted-tested.
--- NOTE: the topright_root rescale also drifts the column's Y; that compensation is DEFERRED.
-function M.cs_compensated_vstartx(vstartx, factor, fudge)
-  if factor == nil or factor <= 0 or factor == 1 then
+-- Re-anchor the vertical column's start-x for the two Combined Status changes.
+-- Invariance: factor * (cs_sp_x + comp_vstartx) = CS_SIDEPANEL_X + vstartx (vanilla screen pos)
+-- → comp_vstartx = (CS_SIDEPANEL_X + vstartx) / factor - cs_sp_x
+-- cs_sp_x nil → defaults to CS_SIDEPANEL_X (vanilla sidepanel pos → no position delta).
+-- factor nil / <= 0 → no compensation. fudge scales the entire correction (1 = full).
+-- NOTE: topright_root rescale also drifts Y; that compensation is DEFERRED.
+function M.cs_compensated_vstartx(vstartx, factor, cs_sp_x, fudge)
+  if factor == nil or factor <= 0 then
     return vstartx
   end
-  local base = M.CS_SIDEPANEL_X + vstartx
-  return vstartx + (1 / factor - 1) * base * (fudge or 1)
+  local eff_sp_x = cs_sp_x ~= nil and cs_sp_x or M.CS_SIDEPANEL_X
+  -- no change needed: vanilla scale + vanilla sidepanel position
+  if factor == 1 and eff_sp_x == M.CS_SIDEPANEL_X then
+    return vstartx
+  end
+  local target = (M.CS_SIDEPANEL_X + vstartx) / factor - eff_sp_x
+  return vstartx + (target - vstartx) * (fudge or 1)
 end
 
 -- badges that fit in one column given screen geometry. >= 1 (or PERCOL_FALLBACK if screen/scale
@@ -162,10 +170,9 @@ function M.compute_badge_positions(opts)
     vstartx, vstarty = opts.phud_xpos, opts.phud_ypos
   end
   local vgap = opts.show_substatus and opts.vert_gap or opts.vert_gap_compact
-  -- mod-aware re-anchor (Combined Status etc. rescale topright_root -> our column drifts); no-op when
-  -- opts.cs_factor is nil (CS absent / scale unreadable) or 1 (vanilla scale).
+  -- mod-aware re-anchor (CS rescales tr_scale_root AND repositions sidepanel); no-op when cs_factor nil.
   if opts.cs_factor ~= nil then
-    vstartx = M.cs_compensated_vstartx(vstartx, opts.cs_factor, opts.cs_fudge)
+    vstartx = M.cs_compensated_vstartx(vstartx, opts.cs_factor, opts.cs_sp_x, opts.cs_fudge)
   end
   local bpmode = opts.bpmode
   if bpmode == 1 then

@@ -323,16 +323,29 @@ local function layout_badges(badgearray)
   -- MUST use GetLooseScale() (local UITransform only), NOT GetScale() (compound world scale which
   -- absorbs Widget("side")'s SCALEMODE_PROPORTIONAL engine scale → cs_factor ≠ CS_HUDSCALEFACTOR).
   local cs_factor = nil
+  local cs_sp_x = nil
   if HAS_COMBINED_STATUS and badgearray[1] ~= nil then
     local sd = badgearray[1].parent
     local sidepanel = sd ~= nil and sd.parent or nil
     local topright = sidepanel ~= nil and sidepanel.parent or nil
+    -- cs_factor: read tr_scale_root local UITransform scale (not compound GetScale — avoids absorbing
+    -- Widget("side")'s SCALEMODE_PROPORTIONAL engine scale into cs_factor).
     if topright ~= nil and topright.inst ~= nil and hudscale ~= nil and hudscale > 0 then
       local ok, sx, _, _ = GLOBAL.pcall(function()
         return topright.inst.UITransform:GetScale()
       end)
       if ok and sx ~= nil and sx > 0 then
         cs_factor = sx / hudscale
+      end
+    end
+    -- cs_sp_x: read live sidepanel local X (CS moves it from -80 to -100; read live so future CS
+    -- updates or other mods that reposition sidepanel are automatically handled).
+    if sidepanel ~= nil and sidepanel.inst ~= nil then
+      local ok, lx, _, _ = GLOBAL.pcall(function()
+        return sidepanel.inst.UITransform:GetLocalPosition()
+      end)
+      if ok and lx ~= nil then
+        cs_sp_x = lx
       end
     end
   end
@@ -369,6 +382,7 @@ local function layout_badges(badgearray)
     backpack_bottom_extra = BACKPACK_BOTTOM_EXTRA,
     horizontal_step = -70, -- per-badge x step in the horizontal row
     cs_factor = cs_factor,
+    cs_sp_x = cs_sp_x,
     cs_fudge = CS_FUDGE,
   }
   local positions = layoutmath.compute_badge_positions(opts)
@@ -462,7 +476,14 @@ GLOBAL.PartyHud_CSDebug = function()
   end
   print("[PartyHud] == CSDebug widget tree ==")
   print("[PartyHud]   badge.parent (expect statusdisplays):", wname(p1), "scale.x=" .. sx(p1))
-  print("[PartyHud]   .parent      (expect sidepanel)     :", wname(p2), "scale.x=" .. sx(p2))
+  -- sidepanel local position: vanilla (-80,-60), CS moves to (-100,-70)
+  local sp_lx, sp_ly
+  if p2 ~= nil and p2.inst ~= nil then
+    local ok, lx, ly = _G.pcall(function() return p2.inst.UITransform:GetLocalPosition() end)
+    sp_lx = ok and lx or nil; sp_ly = ok and ly or nil
+  end
+  print("[PartyHud]   .parent      (expect sidepanel)     :", wname(p2),
+    "scale.x=" .. sx(p2), "localpos=(" .. tostring(sp_lx) .. "," .. tostring(sp_ly) .. ")")
   print("[PartyHud]   .parent      (expect topright_root) :", wname(p3), "scale.x=" .. sx(p3))
   print("[PartyHud]   .parent      (expect screen root)   :", wname(p4), "scale.x=" .. sx(p4))
   print("[PartyHud]   GetHUDScale:", tostring(hs))
@@ -471,7 +492,10 @@ GLOBAL.PartyHud_CSDebug = function()
     return ok and lx or nil
   end)() or nil
   local factor = (s3raw_x ~= nil and hs ~= nil and hs > 0) and (s3raw_x / hs) or nil
-  print("[PartyHud]   cs_factor (topright_scale/hs):", tostring(factor))
+  print("[PartyHud]   cs_factor (topright_local_scale/hs):", tostring(factor),
+    "(expect CS HUDSCALEFACTOR, e.g. 1.1 for 110%)")
+  print("[PartyHud]   cs_sp_x (sidepanel local X):", tostring(sp_lx),
+    "(vanilla=-80, CS=-100)")
   print("[PartyHud]   HAS_COMBINED_STATUS:", tostring(HAS_COMBINED_STATUS))
   print("[PartyHud]   CS_FUDGE:", tostring(CS_FUDGE))
 end
