@@ -434,6 +434,52 @@ GLOBAL.PartyHud_CSFudge = function(f)
 end
 -- luacheck: pop
 
+-- [DEBUG/util] diagnose the Combined Status X compensation widget tree. Prints each parent's name,
+-- scale, and the computed cs_factor so mismatches in the assumed tree (CS_SIDEPANEL_X, CS_SD_SCALE,
+-- or the node that topright_root actually is) can be spotted in client_log. Client-only.
+-- luacheck: push ignore 122
+GLOBAL.PartyHud_CSDebug = function()
+  local p = _G.ThePlayer
+  local sd = p ~= nil and p.HUD ~= nil and p.HUD.controls ~= nil and p.HUD.controls.status or nil
+  local b = sd ~= nil and sd.badgearray ~= nil and sd.badgearray[1] or nil
+  if b == nil then
+    print("[PartyHud] CSDebug: no badge found (no players?)")
+    return
+  end
+  local p1 = b.parent
+  local p2 = p1 ~= nil and p1.parent or nil
+  local p3 = p2 ~= nil and p2.parent or nil
+  local p4 = p3 ~= nil and p3.parent or nil
+  local hs = (_G.TheFrontEnd ~= nil and _G.TheFrontEnd.GetHUDScale ~= nil)
+    and _G.TheFrontEnd:GetHUDScale() or nil
+  local function sx(w)
+    if w == nil or w.GetScale == nil then return "nil" end
+    local ok, s = _G.pcall(function() return w:GetScale() end)
+    if not ok or s == nil then return "err" end
+    return tostring(type(s) == "number" and s or s.x)
+  end
+  print("[PartyHud] == CSDebug widget tree ==")
+  print("[PartyHud]   badge.parent (expect statusdisplays):", p1 ~= nil and p1:GetName() or "nil",
+    "scale.x=" .. sx(p1))
+  print("[PartyHud]   .parent      (expect sidepanel)     :", p2 ~= nil and p2:GetName() or "nil",
+    "scale.x=" .. sx(p2))
+  print("[PartyHud]   .parent      (expect topright_root) :", p3 ~= nil and p3:GetName() or "nil",
+    "scale.x=" .. sx(p3))
+  print("[PartyHud]   .parent      (expect screen root)   :", p4 ~= nil and p4:GetName() or "nil",
+    "scale.x=" .. sx(p4))
+  print("[PartyHud]   GetHUDScale:", tostring(hs))
+  local s3raw = p3 ~= nil and p3.GetScale ~= nil and (function()
+    local ok, s = _G.pcall(function() return p3:GetScale() end)
+    return ok and s or nil
+  end)() or nil
+  local s3x = s3raw ~= nil and (type(s3raw) == "number" and s3raw or s3raw.x) or nil
+  local factor = (s3x ~= nil and hs ~= nil and hs > 0) and (s3x / hs) or nil
+  print("[PartyHud]   cs_factor (topright_scale/hs):", tostring(factor))
+  print("[PartyHud]   HAS_COMBINED_STATUS:", tostring(HAS_COMBINED_STATUS))
+  print("[PartyHud]   CS_FUDGE:", tostring(CS_FUDGE))
+end
+-- luacheck: pop
+
 -- [DEBUG/util] runtime "Show Your Own Badge" toggle from the client console, no reconnect needed:
 --   PartyHud_SkipSelf()      -> toggle skip-self on/off
 --   PartyHud_SkipSelf(true)  -> Skip (hide your own badge);  PartyHud_SkipSelf(false) -> Show it
