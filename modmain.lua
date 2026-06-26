@@ -358,12 +358,12 @@ local function layout_badges(badgearray)
     end
   end
   -- Apply X re-anchor before passing to compute_badge_positions.
-  -- CS path: heart-relative alignment (CS_NUDGE tunes the residual live via PartyHud_CSNudge).
+  -- CS path: align our column to vanilla HP badge X + CS_NUDGE (tune live via PartyHud_CSNudge).
+  --   vstartx = heart_local_x + CS_NUDGE  → our first badge sits at the HP badge's X position.
   -- Generic path: analytical formula (cs_factor + cs_sp_x + CS_FUDGE).
   local cs_vstartx_override = nil
   if HAS_COMBINED_STATUS and cs_heart_x ~= nil then
-    local vanilla_gap = VERT_X - cs_heart_x -- vanilla offset between our column and HP badge
-    cs_vstartx_override = cs_heart_x + vanilla_gap / (cs_factor or 1) + CS_NUDGE
+    cs_vstartx_override = cs_heart_x + CS_NUDGE
   end
   -- v2026.8: an equipped backpack overlaps our HUD differently per UI mode (see backpack_layout_mode):
   --  * Mode A (1, side/floating): its container hugs the right screen edge over our badges -> shift ALL
@@ -524,8 +524,7 @@ GLOBAL.PartyHud_CSDebug = function()
     heart_lx = ok and hx or nil
   end
   local vanilla_gap = heart_lx ~= nil and (VERT_X - heart_lx) or nil
-  local cs_vstartx = (heart_lx ~= nil and factor ~= nil)
-    and (heart_lx + (vanilla_gap or 0) / factor + CS_NUDGE) or nil
+  local cs_vstartx = heart_lx ~= nil and (heart_lx + CS_NUDGE) or nil
   print("[PartyHud]   cs_factor (topright_local_scale/hs):", tostring(factor),
     "(expect CS HUDSCALEFACTOR, e.g. 1.1 for 110%)")
   print("[PartyHud]   cs_sp_x (sidepanel local X):", tostring(sp_lx),
