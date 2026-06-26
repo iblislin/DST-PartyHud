@@ -102,8 +102,10 @@ do
     HAS_COMBINED_STATUS = (ok and enabled) and true or false
   end
 end
--- in-engine residual multiplier for the CS X-compensation (1.0 = use the analytic value as-is); tunable
--- live via PartyHud_CSFudge for fine alignment. Read by layout_badges, passed into compute_badge_positions.
+-- CS-specific heart-alignment nudge: pixel offset added to the CS HP-badge-relative anchor.
+-- 0 = our column aligns relative to HP badge maintaining the vanilla gap; tune live via PartyHud_CSNudge.
+local CS_NUDGE = 0
+-- Generic analytical fudge (non-CS mods): see PartyHud_CSFudge.
 local CS_FUDGE = 1.0
 
 --imports partybadge
@@ -311,25 +313,23 @@ local function layout_badges(badgearray)
   if GLOBAL.TheFrontEnd ~= nil and GLOBAL.TheFrontEnd.GetHUDScale ~= nil then
     hudscale = GLOBAL.TheFrontEnd:GetHUDScale() or 1
   end
-  -- mod-aware: when Combined Status (or any mod) rescales tr_scale_root (= topright_root), read the live
-  -- CS factor and re-anchor vstartx. Real widget tree (controls.lua, non-splitscreen):
+  -- mod-aware X re-anchor. Widget tree (controls.lua non-splitscreen):
   --   Widget("side") [SCALEMODE_PROPORTIONAL]
-  --   └── tr_scale_root ("tr_scale_root") [SetScale(hudscale) in SetHUDSize; = self.topright_root]
-  --       └── sidepanel ("sidepanel") [pos=(-80,-60,0)]
-  --           └── StatusDisplays [pos=(0,-110,0), scale=1]
+  --   └── tr_scale_root [SetScale(hudscale) in SetHUDSize]
+  --       └── sidepanel [vanilla pos=(-80,-60); CS moves to (-100,-70)]
+  --           └── StatusDisplays [pos=(0,-110), scale=1]
   --               └── our badge
-  -- Walk badge -> statusdisplays (.parent) -> sidepanel (.parent) -> tr_scale_root (.parent).
-  -- cs_factor = tr_scale_root local scale / GetHUDScale() = CS_HUDSCALEFACTOR.
-  -- MUST use GetLooseScale() (local UITransform only), NOT GetScale() (compound world scale which
-  -- absorbs Widget("side")'s SCALEMODE_PROPORTIONAL engine scale → cs_factor ≠ CS_HUDSCALEFACTOR).
+  -- Always read tr_scale_root local scale for generic mod support; CS-specific path reads the vanilla
+  -- HP badge (sd.heart) for relative alignment instead of the analytical formula.
   local cs_factor = nil
-  local cs_sp_x = nil
-  if HAS_COMBINED_STATUS and badgearray[1] ~= nil then
+  local cs_heart_x = nil -- CS only: vanilla HP badge local X in StatusDisplays
+  local cs_sp_x = nil    -- generic: live sidepanel local X (analytical formula fallback)
+  if badgearray[1] ~= nil then
     local sd = badgearray[1].parent
     local sidepanel = sd ~= nil and sd.parent or nil
     local topright = sidepanel ~= nil and sidepanel.parent or nil
-    -- cs_factor: read tr_scale_root local UITransform scale (not compound GetScale — avoids absorbing
-    -- Widget("side")'s SCALEMODE_PROPORTIONAL engine scale into cs_factor).
+    -- cs_factor: tr_scale_root UITransform:GetScale() (local only — avoids Widget("side")'s
+    -- SCALEMODE_PROPORTIONAL compound scale contaminating the factor).
     if topright ~= nil and topright.inst ~= nil and hudscale ~= nil and hudscale > 0 then
       local ok, sx, _, _ = GLOBAL.pcall(function()
         return topright.inst.UITransform:GetScale()
@@ -338,16 +338,32 @@ local function layout_badges(badgearray)
         cs_factor = sx / hudscale
       end
     end
-    -- cs_sp_x: read live sidepanel local X (CS moves it from -80 to -100; read live so future CS
-    -- updates or other mods that reposition sidepanel are automatically handled).
-    if sidepanel ~= nil and sidepanel.inst ~= nil then
-      local ok, lx, _, _ = GLOBAL.pcall(function()
-        return sidepanel.inst.UITransform:GetLocalPosition()
-      end)
-      if ok and lx ~= nil then
-        cs_sp_x = lx
+    if HAS_COMBINED_STATUS then
+      -- CS-specific: read vanilla HP badge X (sd.heart) for relative alignment.
+      -- Maintains vanilla relative gap between our column and HP badge at any HUDSCALEFACTOR.
+      if sd ~= nil and sd.heart ~= nil and sd.heart.inst ~= nil then
+        local ok, hx, _, _ = GLOBAL.pcall(function()
+          return sd.heart.inst.UITransform:GetLocalPosition()
+        end)
+        if ok and hx ~= nil then cs_heart_x = hx end
+      end
+    else
+      -- Generic fallback: live sidepanel local X for the analytical formula.
+      if sidepanel ~= nil and sidepanel.inst ~= nil then
+        local ok, lx, _, _ = GLOBAL.pcall(function()
+          return sidepanel.inst.UITransform:GetLocalPosition()
+        end)
+        if ok and lx ~= nil then cs_sp_x = lx end
       end
     end
+  end
+  -- Apply X re-anchor before passing to compute_badge_positions.
+  -- CS path: heart-relative alignment (CS_NUDGE tunes the residual live via PartyHud_CSNudge).
+  -- Generic path: analytical formula (cs_factor + cs_sp_x + CS_FUDGE).
+  local cs_vstartx_override = nil
+  if HAS_COMBINED_STATUS and cs_heart_x ~= nil then
+    local vanilla_gap = VERT_X - cs_heart_x -- vanilla offset between our column and HP badge
+    cs_vstartx_override = cs_heart_x + vanilla_gap / (cs_factor or 1) + CS_NUDGE
   end
   -- v2026.8: an equipped backpack overlaps our HUD differently per UI mode (see backpack_layout_mode):
   --  * Mode A (1, side/floating): its container hugs the right screen edge over our badges -> shift ALL
@@ -384,6 +400,7 @@ local function layout_badges(badgearray)
     cs_factor = cs_factor,
     cs_sp_x = cs_sp_x,
     cs_fudge = CS_FUDGE,
+    cs_vstartx_override = cs_vstartx_override, -- CS heart-relative override (nil = use analytical)
   }
   local positions = layoutmath.compute_badge_positions(opts)
   for _, p in ipairs(positions) do
@@ -430,9 +447,22 @@ GLOBAL.PartyHud_Layout = function(n)
 end
 -- luacheck: pop
 
--- [DEBUG/util] tune the Combined-Status X re-anchor residual multiplier live (no reconnect). 1.0 = the
--- analytic compensation as-is; nudge if the column still isn't flush with the border under CS. Relayouts
--- the live badges. Client-only. Returns the new fudge.
+-- [DEBUG/util] CS-specific: nudge the heart-relative anchor by N pixels (positive = right, negative = left).
+-- 0 = our column maintains the exact vanilla relative gap to the vanilla HP badge. Relayouts live.
+-- luacheck: push ignore 122
+GLOBAL.PartyHud_CSNudge = function(n)
+  CS_NUDGE = n or 0
+  local p = _G.ThePlayer
+  local sd = p ~= nil and p.HUD ~= nil and p.HUD.controls ~= nil and p.HUD.controls.status or nil
+  if sd ~= nil and sd.badgearray ~= nil then
+    layout_badges(sd.badgearray)
+  end
+  print("[PartyHud] CS_NUDGE = " .. tostring(CS_NUDGE))
+  return CS_NUDGE
+end
+-- luacheck: pop
+
+-- [DEBUG/util] tune the Combined-Status generic analytical fudge (non-CS mods). 1.0 = as-is.
 -- luacheck: push ignore 122
 GLOBAL.PartyHud_CSFudge = function(f)
   CS_FUDGE = f or 1.0
@@ -487,17 +517,23 @@ GLOBAL.PartyHud_CSDebug = function()
   print("[PartyHud]   .parent      (expect topright_root) :", wname(p3), "scale.x=" .. sx(p3))
   print("[PartyHud]   .parent      (expect screen root)   :", wname(p4), "scale.x=" .. sx(p4))
   print("[PartyHud]   GetHUDScale:", tostring(hs))
-  local s3raw_x = p3 ~= nil and p3.inst ~= nil and (function()
-    local ok, lx = _G.pcall(function() return p3.inst.UITransform:GetScale() end)
-    return ok and lx or nil
-  end)() or nil
-  local factor = (s3raw_x ~= nil and hs ~= nil and hs > 0) and (s3raw_x / hs) or nil
+  -- vanilla HP badge (sd.heart) local X in StatusDisplays — the CS heart-alignment anchor
+  local heart_lx = nil
+  if p1 ~= nil and p1.heart ~= nil and p1.heart.inst ~= nil then
+    local ok, hx = _G.pcall(function() return p1.heart.inst.UITransform:GetLocalPosition() end)
+    heart_lx = ok and hx or nil
+  end
+  local vanilla_gap = heart_lx ~= nil and (VERT_X - heart_lx) or nil
+  local cs_vstartx = (heart_lx ~= nil and factor ~= nil)
+    and (heart_lx + (vanilla_gap or 0) / factor + CS_NUDGE) or nil
   print("[PartyHud]   cs_factor (topright_local_scale/hs):", tostring(factor),
     "(expect CS HUDSCALEFACTOR, e.g. 1.1 for 110%)")
   print("[PartyHud]   cs_sp_x (sidepanel local X):", tostring(sp_lx),
     "(vanilla=-80, CS=-100)")
+  print("[PartyHud]   heart local X:", tostring(heart_lx), "vanilla_gap:", tostring(vanilla_gap))
+  print("[PartyHud]   cs_vstartx_override:", tostring(cs_vstartx),
+    "CS_NUDGE:", tostring(CS_NUDGE))
   print("[PartyHud]   HAS_COMBINED_STATUS:", tostring(HAS_COMBINED_STATUS))
-  print("[PartyHud]   CS_FUDGE:", tostring(CS_FUDGE))
 end
 -- luacheck: pop
 

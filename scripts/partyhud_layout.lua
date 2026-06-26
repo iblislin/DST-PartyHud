@@ -171,7 +171,10 @@ function M.compute_badge_positions(opts)
   end
   local vgap = opts.show_substatus and opts.vert_gap or opts.vert_gap_compact
   -- mod-aware re-anchor (CS rescales tr_scale_root AND repositions sidepanel); no-op when cs_factor nil.
-  if opts.cs_factor ~= nil then
+  -- cs_vstartx_override: CS heart-relative alignment (beats the analytical formula when set).
+  if opts.cs_vstartx_override ~= nil then
+    vstartx = opts.cs_vstartx_override
+  elseif opts.cs_factor ~= nil then
     vstartx = M.cs_compensated_vstartx(vstartx, opts.cs_factor, opts.cs_sp_x, opts.cs_fudge)
   end
   local bpmode = opts.bpmode
