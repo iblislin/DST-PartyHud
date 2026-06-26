@@ -10,25 +10,29 @@ M.MAX_PROP = 1.25 -- MAX_HUD_SCALE upscale cap
 M.BADGE_BOTTOM = 60 -- a badge's sub-ring bottom, below its origin
 M.PERCOL_FALLBACK = 6 -- safe per-column count if screen/HUD scale is unreadable
 
--- Vanilla widget-tree constants between topright_root and our badges (sidepanel local x, statusdisplays
--- scale). CS doesn't change these -- it only rescales topright_root -- so they're stable; the cs_fudge
--- multiplier (set in modmain) absorbs any residual if a layout deviates (e.g. splitscreen).
-M.CS_SIDEPANEL_X = -80
-M.CS_SD_SCALE = 1.4
+-- Real vanilla widget tree (non-splitscreen, controls.lua verified):
+--   Widget("side")  [SCALEMODE_PROPORTIONAL]
+--   └── tr_scale_root ("tr_scale_root")  [SetScale(hudscale) in SetHUDSize; = self.topright_root]
+--       └── sidepanel ("sidepanel")  [pos=(-80,-60,0), scale=(1,1,1)]
+--           └── StatusDisplays  [pos=(0,-110,0), no SetScale → local scale=1]
+--               └── our badge
+-- CS rescales tr_scale_root via its own SetHUDSize override → scale = hudscale × CS_HUDSCALEFACTOR.
+-- cs_factor = tr_scale_root local scale / GetHUDScale() = CS_HUDSCALEFACTOR.
+-- Widget("side") carries a SCALEMODE_PROPORTIONAL engine scale that is NOT part of the CS effect;
+-- GetScale() (compound) would absorb it. Use GetLooseScale() (local UITransform only) on tr_scale_root.
+M.CS_SIDEPANEL_X = -80 -- sidepanel local X inside tr_scale_root (controls.lua:135 SetPosition(-80,-60,0))
 
--- Re-anchor the vertical column's start-x when an ancestor (topright_root) is rescaled by `factor`
--- relative to the vanilla HUD scale (factor = live topright_root_scale / GetHUDScale(); 1 = vanilla / no
--- rescaling mod). Keeps the column at the same SCREEN x it would have at factor 1, so a mod like Combined
--- Status that rescales topright_root no longer drifts our right-anchored column off the border. `fudge`
--- (default 1) is an in-engine residual multiplier. factor nil / <= 0 / == 1 -> returned unchanged (CS
--- absent, unreadable scale, or vanilla scale -> no compensation). Pure; busted-tested.
--- NOTE: the topright_root rescale also drifts the column's Y; that compensation is DEFERRED to an
--- in-engine visual-tuning pass (X only here).
+-- Re-anchor the vertical column's start-x when tr_scale_root (= topright_root) is rescaled by `factor`
+-- relative to vanilla (factor = tr_scale_root GetLooseScale / GetHUDScale(); 1 = no rescaling).
+-- Screen-x model (non-splitscreen): screen_x = anchor + factor*hudscale * (CS_SIDEPANEL_X + vstartx).
+-- Invariance: comp_vstartx s.t. factor * (CS_SIDEPANEL_X + comp_vstartx) = 1 * (CS_SIDEPANEL_X + vstartx).
+-- factor nil / <= 0 / == 1 -> unchanged. Pure; busted-tested.
+-- NOTE: the topright_root rescale also drifts the column's Y; that compensation is DEFERRED.
 function M.cs_compensated_vstartx(vstartx, factor, fudge)
   if factor == nil or factor <= 0 or factor == 1 then
     return vstartx
   end
-  local base = M.CS_SIDEPANEL_X / M.CS_SD_SCALE + vstartx
+  local base = M.CS_SIDEPANEL_X + vstartx
   return vstartx + (1 / factor - 1) * base * (fudge or 1)
 end
 

@@ -311,30 +311,28 @@ local function layout_badges(badgearray)
   if GLOBAL.TheFrontEnd ~= nil and GLOBAL.TheFrontEnd.GetHUDScale ~= nil then
     hudscale = GLOBAL.TheFrontEnd:GetHUDScale() or 1
   end
-  -- mod-aware: when Combined Status (or any mod) rescales topright_root, read the live deviation factor
-  -- F = topright_root_scale / hudscale so compute_badge_positions can re-anchor. Walk badge -> statusdisplays
-  -- (badge.parent) -> sidepanel (.parent) -> topright_root (.parent). Defensive: any nil / unreadable scale
-  -- -> cs_factor nil -> no compensation (current behaviour). Widget:GetScale() returns a Vector3 (the
-  -- COMPOUND world-space scale = the widget's own UITransform scale * its ancestors'); we take .x. For
-  -- topright_root the only ancestor is the unscaled screen root, so .x equals topright_root's effective
-  -- scale (= GetHUDScale() * CS's HUDSCALEFACTOR under Combined Status); dividing by hudscale yields the
-  -- CS factor. (If a future mod ALSO rescales an ancestor of topright_root, the compound scale absorbs
-  -- that too -- acceptable, we compensate for any ancestor-chain rescale, not only CS.) The parent chain:
-  -- badge (our partybadge) -> statusdisplays -> sidepanel -> topright_root.
+  -- mod-aware: when Combined Status (or any mod) rescales tr_scale_root (= topright_root), read the live
+  -- CS factor and re-anchor vstartx. Real widget tree (controls.lua, non-splitscreen):
+  --   Widget("side") [SCALEMODE_PROPORTIONAL]
+  --   └── tr_scale_root ("tr_scale_root") [SetScale(hudscale) in SetHUDSize; = self.topright_root]
+  --       └── sidepanel ("sidepanel") [pos=(-80,-60,0)]
+  --           └── StatusDisplays [pos=(0,-110,0), scale=1]
+  --               └── our badge
+  -- Walk badge -> statusdisplays (.parent) -> sidepanel (.parent) -> tr_scale_root (.parent).
+  -- cs_factor = tr_scale_root local scale / GetHUDScale() = CS_HUDSCALEFACTOR.
+  -- MUST use GetLooseScale() (local UITransform only), NOT GetScale() (compound world scale which
+  -- absorbs Widget("side")'s SCALEMODE_PROPORTIONAL engine scale → cs_factor ≠ CS_HUDSCALEFACTOR).
   local cs_factor = nil
   if HAS_COMBINED_STATUS and badgearray[1] ~= nil then
     local sd = badgearray[1].parent
     local sidepanel = sd ~= nil and sd.parent or nil
     local topright = sidepanel ~= nil and sidepanel.parent or nil
-    if topright ~= nil and topright.GetScale ~= nil and hudscale ~= nil and hudscale > 0 then
-      local ok, s = GLOBAL.pcall(function()
-        return topright:GetScale()
+    if topright ~= nil and topright.inst ~= nil and hudscale ~= nil and hudscale > 0 then
+      local ok, sx, _, _ = GLOBAL.pcall(function()
+        return topright.inst.UITransform:GetScale()
       end)
-      if ok and s ~= nil then
-        local sx = (type(s) == "number") and s or s.x
-        if sx ~= nil and sx > 0 then
-          cs_factor = sx / hudscale
-        end
+      if ok and sx ~= nil and sx > 0 then
+        cs_factor = sx / hudscale
       end
     end
   end
@@ -453,10 +451,10 @@ GLOBAL.PartyHud_CSDebug = function()
   local hs = (_G.TheFrontEnd ~= nil and _G.TheFrontEnd.GetHUDScale ~= nil)
     and _G.TheFrontEnd:GetHUDScale() or nil
   local function sx(w)
-    if w == nil or w.GetScale == nil then return "nil" end
-    local ok, s = _G.pcall(function() return w:GetScale() end)
-    if not ok or s == nil then return "err" end
-    return tostring(type(s) == "number" and s or s.x)
+    if w == nil or w.inst == nil then return "nil" end
+    local ok, lx, _, _ = _G.pcall(function() return w.inst.UITransform:GetScale() end)
+    local ok2, wx = _G.pcall(function() local s = w:GetScale(); return (type(s)=="number") and s or s.x end)
+    return "loose=" .. (ok and tostring(lx) or "err") .. " compound=" .. (ok2 and tostring(wx) or "err")
   end
   local function wname(w)
     if w == nil then return "nil" end
@@ -468,12 +466,11 @@ GLOBAL.PartyHud_CSDebug = function()
   print("[PartyHud]   .parent      (expect topright_root) :", wname(p3), "scale.x=" .. sx(p3))
   print("[PartyHud]   .parent      (expect screen root)   :", wname(p4), "scale.x=" .. sx(p4))
   print("[PartyHud]   GetHUDScale:", tostring(hs))
-  local s3raw = p3 ~= nil and p3.GetScale ~= nil and (function()
-    local ok, s = _G.pcall(function() return p3:GetScale() end)
-    return ok and s or nil
+  local s3raw_x = p3 ~= nil and p3.inst ~= nil and (function()
+    local ok, lx = _G.pcall(function() return p3.inst.UITransform:GetScale() end)
+    return ok and lx or nil
   end)() or nil
-  local s3x = s3raw ~= nil and (type(s3raw) == "number" and s3raw or s3raw.x) or nil
-  local factor = (s3x ~= nil and hs ~= nil and hs > 0) and (s3x / hs) or nil
+  local factor = (s3raw_x ~= nil and hs ~= nil and hs > 0) and (s3raw_x / hs) or nil
   print("[PartyHud]   cs_factor (topright_scale/hs):", tostring(factor))
   print("[PartyHud]   HAS_COMBINED_STATUS:", tostring(HAS_COMBINED_STATUS))
   print("[PartyHud]   CS_FUDGE:", tostring(CS_FUDGE))
