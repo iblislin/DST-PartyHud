@@ -58,6 +58,11 @@ local PartyBadge = Class(Badge, function(self, owner)
   -- modern health badge: anim=nil -> status_meter path; iconbuild "status_health"
   -- overrides the heart icon onto the frame; red tint; dont_update_while_paused=true
   Badge._ctor(self, nil, owner, HEALTHBADGE_TINT, "status_health", nil, nil, true)
+  -- Combined Status hooks Badge._ctor via AddClassPostConstruct and adds a stat-number background
+  -- square (self.bg) + scales the badge to 0.9. Both are inappropriate for our compact party rings.
+  -- Hide bg and restore scale immediately after Badge._ctor so CS's hook has no visible effect.
+  if self.bg ~= nil then self.bg:Hide() end
+  self:SetScale(1, 1, 1)
 
   -- player name label above the badge
   self.name = self:AddChild(Text(BODYTEXTFONT, 20))
@@ -68,11 +73,13 @@ local PartyBadge = Class(Badge, function(self, owner)
   -- v2026.6 hunger sub-ring (gold), below-left of the main ring.
   -- Its absolute number is shown only on hover (default Badge focus behaviour).
   self.hungerbadge = self:AddChild(Badge(nil, owner, HUNGER_TINT, "status_hunger", nil, nil, true))
+  if self.hungerbadge.bg ~= nil then self.hungerbadge.bg:Hide() end
   self.hungerbadge:SetScale(SUB_SCALE)
   self.hungerbadge:SetPosition(-SUB_X, SUB_Y, 0)
 
   -- v2026.6 sanity sub-ring (orange), below-right of the main ring
   self.sanitybadge = self:AddChild(Badge(nil, owner, SANITY_TINT, "status_sanity", nil, nil, true))
+  if self.sanitybadge.bg ~= nil then self.sanitybadge.bg:Hide() end
   self.sanitybadge:SetScale(SUB_SCALE)
   self.sanitybadge:SetPosition(SUB_X, SUB_Y, 0)
 
