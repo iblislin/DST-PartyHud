@@ -2,7 +2,7 @@ name = "PartyHud 2026"
 description =
   "A DST mod that displays the health, hunger, sanity, on-fire and temperature (overheating/freezing) status of other players. Set Position and layout in config."
 author = "iblislin (DST 2026 port); original PartyHUD by brianchenito"
-version = "2026.13csx2"
+version = "2026.13csx3"
 forumthread = ""
 
 api_version = 10 -- the current version of the modding api

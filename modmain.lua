@@ -458,15 +458,15 @@ GLOBAL.PartyHud_CSDebug = function()
     if not ok or s == nil then return "err" end
     return tostring(type(s) == "number" and s or s.x)
   end
+  local function wname(w)
+    if w == nil then return "nil" end
+    return tostring(w.name or w.inst and w.inst.name or "?")
+  end
   print("[PartyHud] == CSDebug widget tree ==")
-  print("[PartyHud]   badge.parent (expect statusdisplays):", p1 ~= nil and p1:GetName() or "nil",
-    "scale.x=" .. sx(p1))
-  print("[PartyHud]   .parent      (expect sidepanel)     :", p2 ~= nil and p2:GetName() or "nil",
-    "scale.x=" .. sx(p2))
-  print("[PartyHud]   .parent      (expect topright_root) :", p3 ~= nil and p3:GetName() or "nil",
-    "scale.x=" .. sx(p3))
-  print("[PartyHud]   .parent      (expect screen root)   :", p4 ~= nil and p4:GetName() or "nil",
-    "scale.x=" .. sx(p4))
+  print("[PartyHud]   badge.parent (expect statusdisplays):", wname(p1), "scale.x=" .. sx(p1))
+  print("[PartyHud]   .parent      (expect sidepanel)     :", wname(p2), "scale.x=" .. sx(p2))
+  print("[PartyHud]   .parent      (expect topright_root) :", wname(p3), "scale.x=" .. sx(p3))
+  print("[PartyHud]   .parent      (expect screen root)   :", wname(p4), "scale.x=" .. sx(p4))
   print("[PartyHud]   GetHUDScale:", tostring(hs))
   local s3raw = p3 ~= nil and p3.GetScale ~= nil and (function()
     local ok, s = _G.pcall(function() return p3:GetScale() end)
