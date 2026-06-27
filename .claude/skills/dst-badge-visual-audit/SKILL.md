@@ -135,6 +135,43 @@ nested badge needs its own pass.
     right-side catalog + per-widget detection signals. (Things that do NOT collide, so don't chase
     them: bosses, mounts, top-left toasts/desync, the centre scoreboard.)
 
+11a. **Combined Status mod coexistence (Workshop 376333686)** — *when your change touches any
+    `Badge` subclass, HUD positioning, hover/focus behaviour, or badge scale/colour.* Combined
+    Status hooks `Badge._ctor` via `AddClassPostConstruct` on EVERY load and applies the following
+    globally — all of which require active countermeasures:
+    - **Stat-number background square** (`self.bg` `Image`): a box placed at `y=-40.5` below the
+      ring. Added unconditionally to every Badge instance including ours. **Fix: `if self.bg ~= nil
+      then self.bg:Hide() end` immediately after `Badge._ctor`**.
+    - **Badge scale reduction**: `self:SetScale(.9,.9,.9)`. Makes our badges visually smaller than
+      vanilla. **Fix: `self:SetScale(1,1,1)` immediately after `Badge._ctor`**.
+    - **Stat-number repositioned and always-shown**: `self.num` moved to `y=-40.5` (outside the
+      ring) and forced visible via `OnLoseFocus → self.num:Show()`. Breaks hover-only config.
+      **Fix: reset `self.num:SetPosition(3,0,0)` + `SetScale(1,1,1)` after `_ctor`, and wrap
+      `OnGainFocus`/`OnLoseFocus` AFTER CS's hook chain to undo its `num:Show()` and re-apply
+      `_apply_hp_number_visibility`**.
+    - **Max-value text** (`self.maxnum`): added at `SetPosition(6,0,0)` and shown on hover. Clutter
+      for our compact rings. **Fix: `if self.maxnum ~= nil then self.maxnum:Hide() end` in both
+      `OnGainFocus` and `OnLoseFocus` wrappers**.
+    - **`UpdateBadges` re-dims hover numbers every ~0.5s**: `SetForeign` sets `num:SetColour(1,1,1,
+      FOREIGN_ALPHA)` on every refresh tick, overwriting the full-alpha set by `OnGainFocus`.
+      **Fix: in `SetForeign`, check `self.focus` before setting num alpha — if focused, use
+      `FULL_ALPHA` regardless of the foreign dim state**.
+    - **HUD anchor rescale + sidepanel reposition**: CS calls
+      `self.topright_root:SetScale(GetHUDScale() * HUDSCALEFACTOR)` (overrides vanilla `SetHUDSize`)
+      AND `self.sidepanel:SetPosition(-100,-70)` (vanilla: `(-80,-60)`). Both cause our
+      right-anchored column to drift off-screen. **Fix: read `tr_scale_root.inst.UITransform:
+      GetScale()` (local, not compound `GetScale()`) for `cs_factor`, read live sidepanel
+      `UITransform:GetLocalPosition().x` for `cs_sp_x`, and compute the compensated `vstartx`;
+      for CS specifically, align to the vanilla HP badge X (`sd.heart`). For Mode A (side backpack),
+      skip the CS override and use the vanilla `vert_x - backpack_shift_x` path unchanged —
+      the backpack shift goal is absolute screen position, not CS-relative**.
+    - **Dynamic rain/moisture/Abigail dodge not needed for CS**: CS adds its own second-row
+      content and handles the Y shift internally. Use a fixed `CS_Y_OFFSET` instead of the
+      dynamic `second_row_reserve` dodge when CS is active.
+    Check every item above when CS detection (`KnownModIndex:IsModEnabled("workshop-376333686")`)
+    is `true`. The canonical fix pattern is in `scripts/widgets/partybadge.lua` (post-`Badge._ctor`
+    cleanup block) and `modmain.lua` (`layout_badges` CS override section).
+
 12. **Proportional HUD scale in wrap / keep-out math** — a column-count or keep-out reserve that
     converts screen height into widget-local units must divide by the `SCALEMODE_PROPORTIONAL`
     factor (`min(w/1280, h/720)`, capped at `MAX_HUD_SCALE=1.25`) **as well as** `GetHUDScale()`
@@ -155,6 +192,8 @@ nested badge needs its own pass.
 | Layout right at first frame, wrong after, or vice-versa | HUD scale read at construct instead of `DoTaskInTime(0)` / `refreshhudsize` — item 8 |
 | "I reused a base-class `SetPercent`/helper to save code" | The base shortcut rarely matches vanilla's overlay semantics — mirror the vanilla element instead |
 | HUD overlaps a vanilla meter that appears only *sometimes* (rain / opened backpack / Abigail / inspiration) | You positioned against the always-present UI only — account for the *conditional* vanilla widgets — item 11 |
+| Badge has a box below the ring, is slightly smaller than vanilla, or the hover number shows outside the ring / stays dim during hover / flickers back to dim | Combined Status mod is installed — see item 11a for the full countermeasure list |
+| Badge column jumps to a wrong X position only when Combined Status is installed | CS rescales `topright_root` AND repositions `sidepanel` — use `tr_scale_root` local UITransform scale + live sidepanel X; align to HP badge (`sd.heart`) in non-Mode-A; fall back to vanilla path in Mode A — item 11a |
 | Per-column count collapses to 1 (lots of empty space) on a small / resized window | Wrap math omitted the `SCALEMODE_PROPORTIONAL` factor — item 12 |
 | Need an icon's exact pixel size to centre / size it, but it's not in the scripts | It's in the texture atlas — extract `hud.xml` UVs + the `.tex` KTEX dims — references §13 |
 | HUD shifts to dodge one obstacle but then covers a *different* one; or a "wide" dodge over-pads after a shift; or one badge state under-clears | Obstacles are independent, a shift changes how many columns a band spans, and the dodge amount = the deepest active badge — references §14 |
@@ -182,3 +221,11 @@ Static review + luacheck + a clean dedicated-server load do **not** prove appear
   Abigail / inspiration second-row badges; and **resize the window** (item 12) to confirm the
   per-column count stays stable. (Spawn `c_spawn("wilson")` dummies to populate enough badges to
   actually wrap into the columns you're checking.)
+- **For Combined Status coexistence (item 11a)**: install CS alongside the mod and verify:
+  (a) no square box below any badge, (b) badge scale looks identical to vanilla, (c) hover number
+  appears inside the ring (not below it) and stays fully visible for the entire hover without
+  flickering back to dim, (d) column aligns to the HP ring position — not the sanity ring — when
+  CS's HUD Scale is at default (100%), (e) changing CS's HUD Scale setting shifts the column
+  correctly, (f) equipping a side backpack (Mode A) shifts the column left by the same amount as
+  without CS. Use `PartyHud_CSDebug()` in the client console to read the live `cs_factor`,
+  `heart local X`, and `cs_vstartx_override` values for diagnosis.
