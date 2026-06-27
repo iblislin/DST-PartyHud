@@ -118,7 +118,7 @@ local PartyBadge = Class(Badge, function(self, owner)
   self.hungerbadge.OnLoseFocus = function(s)
     _hb_lose(s)
     if s.maxnum ~= nil then s.maxnum:Hide() end
-    s.num:Hide()
+    if s.num ~= nil then s.num:Hide() end
     local na = self.foreign and badgemath.FOREIGN_ALPHA or badgemath.FULL_ALPHA
     if s.num ~= nil then s.num:SetColour(1, 1, 1, na) end
   end
@@ -144,7 +144,7 @@ local PartyBadge = Class(Badge, function(self, owner)
   self.sanitybadge.OnLoseFocus = function(s)
     _sb_lose(s)
     if s.maxnum ~= nil then s.maxnum:Hide() end
-    s.num:Hide()
+    if s.num ~= nil then s.num:Hide() end
     local na = self.foreign and badgemath.FOREIGN_ALPHA or badgemath.FULL_ALPHA
     if s.num ~= nil then s.num:SetColour(1, 1, 1, na) end
   end

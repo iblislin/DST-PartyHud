@@ -1461,47 +1461,33 @@ local function attach_carrier(inst)
     -- CLIENT: decode the blob into the client-side store whenever the server pushes a new one.
     -- Never throw on a bad/version-skewed blob -- log + keep the previous value, mirroring the
     -- server-side receive handler's fail-soft contract.
-    inst:ListenForEvent("partyhud_foreignblobdirty", function()
+    inst:ListenForEvent("partyhud_foreignblobdirty", guarded("xshard:blobdirty", function()
       local blob = inst.partyhud_foreignblob:value()
-      -- net_string starts nil before the server's first :set(); a connect-time sync can fire
-      -- the dirty event with that nil. Skip it (codec.decode is nil-safe, but this avoids a
-      -- spurious "malformed blob" log line before the first publish).
       if blob == nil or blob == "" then
         return
       end
       local version, records = codec.decode(blob)
       if version == nil then
-        -- `records` carries the decode error message on failure here.
         print("[PartyHud] [XSHARD] client dropped malformed carrier blob: " .. tostring(records))
         return
       end
       client_foreign_records = records
       last_foreign_blob_time = GLOBAL.GetTime()
-      _foreign_stale_logged = false -- a fresh blob arrived; re-arm the stale-log for the next outage
+      _foreign_stale_logged = false
       if DEBUG_XSHARD then
         print("[PartyHud] [XSHARD] client got " .. #records .. " foreign records")
       end
-      -- A far teammate reaches this client ONLY via the blob -- there is no `playerentered` event
-      -- for an out-of-view player -- so the blob update MUST itself drive a badge refresh, or the
-      -- new foreign record never renders until some unrelated local event happens to fire
-      -- UpdateBadges. (Same guarded accessor as the client refresh path elsewhere.)
       if _G.ThePlayer ~= nil and _G.ThePlayer.UpdateBadges ~= nil then
         _G.ThePlayer.UpdateBadges()
       end
-    end)
-    -- v2026.11 fix: the heartbeat dirty event fires every broadcast tick (its value always changes),
-    -- so THIS -- not the content-gated blob event -- is what keeps the freshness clock alive while the
-    -- server task runs. A wedged task stops the heartbeat -> the freshness check trips and stale
-    -- cross-shard badges hide (the original intent), WITHOUT hiding idle-but-healthy far teammates.
-    inst:ListenForEvent("partyhud_heartbeatdirty", function()
+    end))
+    inst:ListenForEvent("partyhud_heartbeatdirty", guarded("xshard:heartbeatdirty", function()
       last_foreign_blob_time = GLOBAL.GetTime()
-      _foreign_stale_logged = false -- a live heartbeat re-arms the stale-log for the next real outage
-      -- drive a refresh so a badge hidden during a (real) stale window reappears promptly once the
-      -- heartbeat resumes; same guarded accessor as the blob listener and the client refresh path.
+      _foreign_stale_logged = false
       if _G.ThePlayer ~= nil and _G.ThePlayer.UpdateBadges ~= nil then
         _G.ThePlayer.UpdateBadges()
       end
-    end)
+    end))
   end
 end
 AddPrefabPostInit("forest_network", attach_carrier)
