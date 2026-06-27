@@ -110,7 +110,7 @@ local CS_NUDGE = 0
 -- CS-specific Y offset: fixed downward push applied ALWAYS when CS is active (replaces the dynamic
 -- moisture/Abigail/Wigfrid second-row dodge for the CS path). Default = MOISTURE_TOP_RESERVE / 2.
 -- Negative = push DOWN (badges lower); tune live via PartyHud_CSYNudge.
-local CS_Y_OFFSET = -37  -- = -math.floor(MOISTURE_TOP_RESERVE / 2) = -37
+local CS_Y_OFFSET = -37 -- = -math.floor(MOISTURE_TOP_RESERVE / 2) = -37
 -- Generic analytical fudge (non-CS mods): see PartyHud_CSFudge.
 local CS_FUDGE = 1.0
 
@@ -329,7 +329,7 @@ local function layout_badges(badgearray)
   -- HP badge (sd.heart) for relative alignment instead of the analytical formula.
   local cs_factor = nil
   local cs_heart_x = nil -- CS only: vanilla HP badge local X in StatusDisplays
-  local cs_sp_x = nil    -- generic: live sidepanel local X (analytical formula fallback)
+  local cs_sp_x = nil -- generic: live sidepanel local X (analytical formula fallback)
   if badgearray[1] ~= nil then
     local sd = badgearray[1].parent
     local sidepanel = sd ~= nil and sd.parent or nil
@@ -351,7 +351,9 @@ local function layout_badges(badgearray)
         local ok, hx, _, _ = GLOBAL.pcall(function()
           return sd.heart.inst.UITransform:GetLocalPosition()
         end)
-        if ok and hx ~= nil then cs_heart_x = hx end
+        if ok and hx ~= nil then
+          cs_heart_x = hx
+        end
       end
     else
       -- Generic fallback: live sidepanel local X for the analytical formula.
@@ -359,7 +361,9 @@ local function layout_badges(badgearray)
         local ok, lx, _, _ = GLOBAL.pcall(function()
           return sidepanel.inst.UITransform:GetLocalPosition()
         end)
-        if ok and lx ~= nil then cs_sp_x = lx end
+        if ok and lx ~= nil then
+          cs_sp_x = lx
+        end
       end
     end
   end
@@ -380,7 +384,7 @@ local function layout_badges(badgearray)
   local cs_vstarty_override = nil
   if HAS_COMBINED_STATUS then
     cs_vstarty_override = VERT_Y + CS_Y_OFFSET
-    cs_second_row_cols = 0    -- no per-column dodge in CS path (fixed Y handles it)
+    cs_second_row_cols = 0 -- no per-column dodge in CS path (fixed Y handles it)
     cs_second_row_reserve = 0
   end
   -- v2026.8: an equipped backpack overlaps our HUD differently per UI mode (see backpack_layout_mode):
@@ -490,8 +494,9 @@ GLOBAL.PartyHud_CSYNudge = function(n)
   if sd ~= nil and sd.badgearray ~= nil then
     layout_badges(sd.badgearray)
   end
-  print("[PartyHud] CS_Y_OFFSET = " .. tostring(CS_Y_OFFSET)
-    .. "  (vstarty = " .. tostring(VERT_Y + CS_Y_OFFSET) .. ")")
+  print(
+    "[PartyHud] CS_Y_OFFSET = " .. tostring(CS_Y_OFFSET) .. "  (vstarty = " .. tostring(VERT_Y + CS_Y_OFFSET) .. ")"
+  )
   return CS_Y_OFFSET
 end
 -- luacheck: pop
@@ -526,16 +531,24 @@ GLOBAL.PartyHud_CSDebug = function()
   local p2 = p1 ~= nil and p1.parent or nil
   local p3 = p2 ~= nil and p2.parent or nil
   local p4 = p3 ~= nil and p3.parent or nil
-  local hs = (_G.TheFrontEnd ~= nil and _G.TheFrontEnd.GetHUDScale ~= nil)
-    and _G.TheFrontEnd:GetHUDScale() or nil
+  local hs = (_G.TheFrontEnd ~= nil and _G.TheFrontEnd.GetHUDScale ~= nil) and _G.TheFrontEnd:GetHUDScale() or nil
   local function sx(w)
-    if w == nil or w.inst == nil then return "nil" end
-    local ok, lx, _, _ = _G.pcall(function() return w.inst.UITransform:GetScale() end)
-    local ok2, wx = _G.pcall(function() local s = w:GetScale(); return (type(s)=="number") and s or s.x end)
+    if w == nil or w.inst == nil then
+      return "nil"
+    end
+    local ok, lx, _, _ = _G.pcall(function()
+      return w.inst.UITransform:GetScale()
+    end)
+    local ok2, wx = _G.pcall(function()
+      local s = w:GetScale()
+      return (type(s) == "number") and s or s.x
+    end)
     return "loose=" .. (ok and tostring(lx) or "err") .. " compound=" .. (ok2 and tostring(wx) or "err")
   end
   local function wname(w)
-    if w == nil then return "nil" end
+    if w == nil then
+      return "nil"
+    end
     return tostring(w.name or w.inst and w.inst.name or "?")
   end
   print("[PartyHud] == CSDebug widget tree ==")
@@ -543,34 +556,46 @@ GLOBAL.PartyHud_CSDebug = function()
   -- sidepanel local position: vanilla (-80,-60), CS moves to (-100,-70)
   local sp_lx, sp_ly
   if p2 ~= nil and p2.inst ~= nil then
-    local ok, lx, ly = _G.pcall(function() return p2.inst.UITransform:GetLocalPosition() end)
-    sp_lx = ok and lx or nil; sp_ly = ok and ly or nil
+    local ok, lx, ly = _G.pcall(function()
+      return p2.inst.UITransform:GetLocalPosition()
+    end)
+    sp_lx = ok and lx or nil
+    sp_ly = ok and ly or nil
   end
-  print("[PartyHud]   .parent      (expect sidepanel)     :", wname(p2),
-    "scale.x=" .. sx(p2), "localpos=(" .. tostring(sp_lx) .. "," .. tostring(sp_ly) .. ")")
+  print(
+    "[PartyHud]   .parent      (expect sidepanel)     :",
+    wname(p2),
+    "scale.x=" .. sx(p2),
+    "localpos=(" .. tostring(sp_lx) .. "," .. tostring(sp_ly) .. ")"
+  )
   print("[PartyHud]   .parent      (expect topright_root) :", wname(p3), "scale.x=" .. sx(p3))
   print("[PartyHud]   .parent      (expect screen root)   :", wname(p4), "scale.x=" .. sx(p4))
   print("[PartyHud]   GetHUDScale:", tostring(hs))
   -- vanilla HP badge (sd.heart) local X in StatusDisplays — the CS heart-alignment anchor
   local heart_lx = nil
   if p1 ~= nil and p1.heart ~= nil and p1.heart.inst ~= nil then
-    local ok, hx = _G.pcall(function() return p1.heart.inst.UITransform:GetLocalPosition() end)
+    local ok, hx = _G.pcall(function()
+      return p1.heart.inst.UITransform:GetLocalPosition()
+    end)
     heart_lx = ok and hx or nil
   end
   local vanilla_gap = heart_lx ~= nil and (VERT_X - heart_lx) or nil
   local cs_vstartx = heart_lx ~= nil and (heart_lx + CS_NUDGE) or nil
   local factor = nil
   if p3 ~= nil and p3.inst ~= nil and hs ~= nil and hs ~= 0 then
-    local ok, fx = _G.pcall(function() return p3.inst.UITransform:GetScale() end)
+    local ok, fx = _G.pcall(function()
+      return p3.inst.UITransform:GetScale()
+    end)
     factor = (ok and fx ~= nil) and (fx / hs) or nil
   end
-  print("[PartyHud]   cs_factor (topright_local_scale/hs):", tostring(factor),
-    "(expect CS HUDSCALEFACTOR, e.g. 1.1 for 110%)")
-  print("[PartyHud]   cs_sp_x (sidepanel local X):", tostring(sp_lx),
-    "(vanilla=-80, CS=-100)")
+  print(
+    "[PartyHud]   cs_factor (topright_local_scale/hs):",
+    tostring(factor),
+    "(expect CS HUDSCALEFACTOR, e.g. 1.1 for 110%)"
+  )
+  print("[PartyHud]   cs_sp_x (sidepanel local X):", tostring(sp_lx), "(vanilla=-80, CS=-100)")
   print("[PartyHud]   heart local X:", tostring(heart_lx), "vanilla_gap:", tostring(vanilla_gap))
-  print("[PartyHud]   cs_vstartx_override:", tostring(cs_vstartx),
-    "CS_NUDGE:", tostring(CS_NUDGE))
+  print("[PartyHud]   cs_vstartx_override:", tostring(cs_vstartx), "CS_NUDGE:", tostring(CS_NUDGE))
   print("[PartyHud]   HAS_COMBINED_STATUS:", tostring(HAS_COMBINED_STATUS))
 end
 -- luacheck: pop
@@ -1465,33 +1490,39 @@ local function attach_carrier(inst)
     -- CLIENT: decode the blob into the client-side store whenever the server pushes a new one.
     -- Never throw on a bad/version-skewed blob -- log + keep the previous value, mirroring the
     -- server-side receive handler's fail-soft contract.
-    inst:ListenForEvent("partyhud_foreignblobdirty", guarded("xshard:blobdirty", function()
-      local blob = inst.partyhud_foreignblob:value()
-      if blob == nil or blob == "" then
-        return
-      end
-      local version, records = codec.decode(blob)
-      if version == nil then
-        print("[PartyHud] [XSHARD] client dropped malformed carrier blob: " .. tostring(records))
-        return
-      end
-      client_foreign_records = records
-      last_foreign_blob_time = GLOBAL.GetTime()
-      _foreign_stale_logged = false
-      if DEBUG_XSHARD then
-        print("[PartyHud] [XSHARD] client got " .. #records .. " foreign records")
-      end
-      if _G.ThePlayer ~= nil and _G.ThePlayer.UpdateBadges ~= nil then
-        _G.ThePlayer.UpdateBadges()
-      end
-    end))
-    inst:ListenForEvent("partyhud_heartbeatdirty", guarded("xshard:heartbeatdirty", function()
-      last_foreign_blob_time = GLOBAL.GetTime()
-      _foreign_stale_logged = false
-      if _G.ThePlayer ~= nil and _G.ThePlayer.UpdateBadges ~= nil then
-        _G.ThePlayer.UpdateBadges()
-      end
-    end))
+    inst:ListenForEvent(
+      "partyhud_foreignblobdirty",
+      guarded("xshard:blobdirty", function()
+        local blob = inst.partyhud_foreignblob:value()
+        if blob == nil or blob == "" then
+          return
+        end
+        local version, records = codec.decode(blob)
+        if version == nil then
+          print("[PartyHud] [XSHARD] client dropped malformed carrier blob: " .. tostring(records))
+          return
+        end
+        client_foreign_records = records
+        last_foreign_blob_time = GLOBAL.GetTime()
+        _foreign_stale_logged = false
+        if DEBUG_XSHARD then
+          print("[PartyHud] [XSHARD] client got " .. #records .. " foreign records")
+        end
+        if _G.ThePlayer ~= nil and _G.ThePlayer.UpdateBadges ~= nil then
+          _G.ThePlayer.UpdateBadges()
+        end
+      end)
+    )
+    inst:ListenForEvent(
+      "partyhud_heartbeatdirty",
+      guarded("xshard:heartbeatdirty", function()
+        last_foreign_blob_time = GLOBAL.GetTime()
+        _foreign_stale_logged = false
+        if _G.ThePlayer ~= nil and _G.ThePlayer.UpdateBadges ~= nil then
+          _G.ThePlayer.UpdateBadges()
+        end
+      end)
+    )
   end
 end
 AddPrefabPostInit("forest_network", attach_carrier)

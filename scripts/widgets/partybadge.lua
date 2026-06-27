@@ -63,13 +63,17 @@ local PartyBadge = Class(Badge, function(self, owner)
   -- forces self.num:Show() always, adds self.maxnum (max HP text), and wraps OnGainFocus/
   -- OnLoseFocus so that OnLoseFocus explicitly calls self.num:Show() after hiding it.
   -- Restore vanilla state and our desired hover behaviour immediately after Badge._ctor.
-  if self.bg ~= nil then self.bg:Hide() end
+  if self.bg ~= nil then
+    self.bg:Hide()
+  end
   self:SetScale(1, 1, 1)
   if self.num ~= nil then
     self.num:SetPosition(3, 0, 0) -- vanilla: inside ring at centre (badge.lua:102)
-    self.num:SetScale(1, 1, 1)    -- vanilla: no squish
+    self.num:SetScale(1, 1, 1) -- vanilla: no squish
   end
-  if self.maxnum ~= nil then self.maxnum:Hide() end
+  if self.maxnum ~= nil then
+    self.maxnum:Hide()
+  end
   -- Wrap OnGainFocus/OnLoseFocus AFTER CS has wrapped them, to undo CS's undesired effects:
   -- OnGainFocus: call full chain (vanilla + mods), then hide maxnum.
   -- OnLoseFocus: call full chain (which CS ends with num:Show()), then re-apply our visibility
@@ -77,19 +81,27 @@ local PartyBadge = Class(Badge, function(self, owner)
   local _prev_gain = self.OnGainFocus
   self.OnGainFocus = function(s)
     _prev_gain(s)
-    if s.maxnum ~= nil then s.maxnum:Hide() end
+    if s.maxnum ~= nil then
+      s.maxnum:Hide()
+    end
     -- Restore num to full alpha on hover even if badge is dimmed (foreign/far player).
     -- SetForeign sets num colour to FOREIGN_ALPHA (0.45); hover should show a crisp readable number.
-    if s.num ~= nil then s.num:SetColour(1, 1, 1, badgemath.FULL_ALPHA) end
+    if s.num ~= nil then
+      s.num:SetColour(1, 1, 1, badgemath.FULL_ALPHA)
+    end
   end
   local _prev_lose = self.OnLoseFocus
   self.OnLoseFocus = function(s)
     _prev_lose(s)
-    if s.maxnum ~= nil then s.maxnum:Hide() end
+    if s.maxnum ~= nil then
+      s.maxnum:Hide()
+    end
     s:_apply_hp_number_visibility(true) -- re-apply our config (hides num if not hp_number_always)
     -- Restore dim alpha on the num now that hover is gone.
     local na = s.foreign and badgemath.FOREIGN_ALPHA or badgemath.FULL_ALPHA
-    if s.num ~= nil then s.num:SetColour(1, 1, 1, na) end
+    if s.num ~= nil then
+      s.num:SetColour(1, 1, 1, na)
+    end
   end
 
   -- player name label above the badge
@@ -101,52 +113,80 @@ local PartyBadge = Class(Badge, function(self, owner)
   -- v2026.6 hunger sub-ring (gold), below-left of the main ring.
   -- Its absolute number is shown only on hover (default Badge focus behaviour).
   self.hungerbadge = self:AddChild(Badge(nil, owner, HUNGER_TINT, "status_hunger", nil, nil, true))
-  if self.hungerbadge.bg ~= nil then self.hungerbadge.bg:Hide() end
+  if self.hungerbadge.bg ~= nil then
+    self.hungerbadge.bg:Hide()
+  end
   if self.hungerbadge.num ~= nil then
     self.hungerbadge.num:SetPosition(3, 0, 0)
     self.hungerbadge.num:SetScale(1, 1, 1)
     self.hungerbadge.num:Hide() -- hidden until hover
   end
-  if self.hungerbadge.maxnum ~= nil then self.hungerbadge.maxnum:Hide() end
+  if self.hungerbadge.maxnum ~= nil then
+    self.hungerbadge.maxnum:Hide()
+  end
   local _hb_gain = self.hungerbadge.OnGainFocus
   self.hungerbadge.OnGainFocus = function(s)
     _hb_gain(s)
-    if s.maxnum ~= nil then s.maxnum:Hide() end
-    if s.num ~= nil then s.num:SetColour(1, 1, 1, badgemath.FULL_ALPHA) end
+    if s.maxnum ~= nil then
+      s.maxnum:Hide()
+    end
+    if s.num ~= nil then
+      s.num:SetColour(1, 1, 1, badgemath.FULL_ALPHA)
+    end
   end
   local _hb_lose = self.hungerbadge.OnLoseFocus
   self.hungerbadge.OnLoseFocus = function(s)
     _hb_lose(s)
-    if s.maxnum ~= nil then s.maxnum:Hide() end
-    if s.num ~= nil then s.num:Hide() end
+    if s.maxnum ~= nil then
+      s.maxnum:Hide()
+    end
+    if s.num ~= nil then
+      s.num:Hide()
+    end
     local na = self.foreign and badgemath.FOREIGN_ALPHA or badgemath.FULL_ALPHA
-    if s.num ~= nil then s.num:SetColour(1, 1, 1, na) end
+    if s.num ~= nil then
+      s.num:SetColour(1, 1, 1, na)
+    end
   end
   self.hungerbadge:SetScale(SUB_SCALE)
   self.hungerbadge:SetPosition(-SUB_X, SUB_Y, 0)
 
   -- v2026.6 sanity sub-ring (orange), below-right of the main ring
   self.sanitybadge = self:AddChild(Badge(nil, owner, SANITY_TINT, "status_sanity", nil, nil, true))
-  if self.sanitybadge.bg ~= nil then self.sanitybadge.bg:Hide() end
+  if self.sanitybadge.bg ~= nil then
+    self.sanitybadge.bg:Hide()
+  end
   if self.sanitybadge.num ~= nil then
     self.sanitybadge.num:SetPosition(3, 0, 0)
     self.sanitybadge.num:SetScale(1, 1, 1)
     self.sanitybadge.num:Hide()
   end
-  if self.sanitybadge.maxnum ~= nil then self.sanitybadge.maxnum:Hide() end
+  if self.sanitybadge.maxnum ~= nil then
+    self.sanitybadge.maxnum:Hide()
+  end
   local _sb_gain = self.sanitybadge.OnGainFocus
   self.sanitybadge.OnGainFocus = function(s)
     _sb_gain(s)
-    if s.maxnum ~= nil then s.maxnum:Hide() end
-    if s.num ~= nil then s.num:SetColour(1, 1, 1, badgemath.FULL_ALPHA) end
+    if s.maxnum ~= nil then
+      s.maxnum:Hide()
+    end
+    if s.num ~= nil then
+      s.num:SetColour(1, 1, 1, badgemath.FULL_ALPHA)
+    end
   end
   local _sb_lose = self.sanitybadge.OnLoseFocus
   self.sanitybadge.OnLoseFocus = function(s)
     _sb_lose(s)
-    if s.maxnum ~= nil then s.maxnum:Hide() end
-    if s.num ~= nil then s.num:Hide() end
+    if s.maxnum ~= nil then
+      s.maxnum:Hide()
+    end
+    if s.num ~= nil then
+      s.num:Hide()
+    end
     local na = self.foreign and badgemath.FOREIGN_ALPHA or badgemath.FULL_ALPHA
-    if s.num ~= nil then s.num:SetColour(1, 1, 1, na) end
+    if s.num ~= nil then
+      s.num:SetColour(1, 1, 1, na)
+    end
   end
   self.sanitybadge:SetScale(SUB_SCALE)
   self.sanitybadge:SetPosition(SUB_X, SUB_Y, 0)
