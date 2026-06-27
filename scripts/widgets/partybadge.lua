@@ -78,12 +78,18 @@ local PartyBadge = Class(Badge, function(self, owner)
   self.OnGainFocus = function(s)
     _prev_gain(s)
     if s.maxnum ~= nil then s.maxnum:Hide() end
+    -- Restore num to full alpha on hover even if badge is dimmed (foreign/far player).
+    -- SetForeign sets num colour to FOREIGN_ALPHA (0.45); hover should show a crisp readable number.
+    if s.num ~= nil then s.num:SetColour(1, 1, 1, FULL_ALPHA) end
   end
   local _prev_lose = self.OnLoseFocus
   self.OnLoseFocus = function(s)
     _prev_lose(s)
     if s.maxnum ~= nil then s.maxnum:Hide() end
     s:_apply_hp_number_visibility(true) -- re-apply our config (hides num if not hp_number_always)
+    -- Restore dim alpha on the num now that hover is gone.
+    local na = s.foreign and FOREIGN_ALPHA or FULL_ALPHA
+    if s.num ~= nil then s.num:SetColour(1, 1, 1, na) end
   end
 
   -- player name label above the badge
@@ -104,11 +110,17 @@ local PartyBadge = Class(Badge, function(self, owner)
   if self.hungerbadge.maxnum ~= nil then self.hungerbadge.maxnum:Hide() end
   local _hb_gain = self.hungerbadge.OnGainFocus
   self.hungerbadge.OnGainFocus = function(s)
-    _hb_gain(s); if s.maxnum ~= nil then s.maxnum:Hide() end
+    _hb_gain(s)
+    if s.maxnum ~= nil then s.maxnum:Hide() end
+    if s.num ~= nil then s.num:SetColour(1, 1, 1, FULL_ALPHA) end
   end
   local _hb_lose = self.hungerbadge.OnLoseFocus
   self.hungerbadge.OnLoseFocus = function(s)
-    _hb_lose(s); if s.maxnum ~= nil then s.maxnum:Hide() end; s.num:Hide()
+    _hb_lose(s)
+    if s.maxnum ~= nil then s.maxnum:Hide() end
+    s.num:Hide()
+    local na = self.foreign and FOREIGN_ALPHA or FULL_ALPHA
+    if s.num ~= nil then s.num:SetColour(1, 1, 1, na) end
   end
   self.hungerbadge:SetScale(SUB_SCALE)
   self.hungerbadge:SetPosition(-SUB_X, SUB_Y, 0)
@@ -124,11 +136,17 @@ local PartyBadge = Class(Badge, function(self, owner)
   if self.sanitybadge.maxnum ~= nil then self.sanitybadge.maxnum:Hide() end
   local _sb_gain = self.sanitybadge.OnGainFocus
   self.sanitybadge.OnGainFocus = function(s)
-    _sb_gain(s); if s.maxnum ~= nil then s.maxnum:Hide() end
+    _sb_gain(s)
+    if s.maxnum ~= nil then s.maxnum:Hide() end
+    if s.num ~= nil then s.num:SetColour(1, 1, 1, FULL_ALPHA) end
   end
   local _sb_lose = self.sanitybadge.OnLoseFocus
   self.sanitybadge.OnLoseFocus = function(s)
-    _sb_lose(s); if s.maxnum ~= nil then s.maxnum:Hide() end; s.num:Hide()
+    _sb_lose(s)
+    if s.maxnum ~= nil then s.maxnum:Hide() end
+    s.num:Hide()
+    local na = self.foreign and FOREIGN_ALPHA or FULL_ALPHA
+    if s.num ~= nil then s.num:SetColour(1, 1, 1, na) end
   end
   self.sanitybadge:SetScale(SUB_SCALE)
   self.sanitybadge:SetPosition(SUB_X, SUB_Y, 0)
