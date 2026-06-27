@@ -108,6 +108,10 @@ end
 -- CS-specific heart-alignment nudge: pixel offset added to the CS HP-badge-relative anchor.
 -- 0 = our column aligns relative to HP badge maintaining the vanilla gap; tune live via PartyHud_CSNudge.
 local CS_NUDGE = 0
+-- CS-specific Y offset: fixed downward push applied ALWAYS when CS is active (replaces the dynamic
+-- moisture/Abigail/Wigfrid second-row dodge for the CS path). Default = MOISTURE_TOP_RESERVE / 2.
+-- Negative = push DOWN (badges lower); tune live via PartyHud_CSYNudge.
+local CS_Y_OFFSET = -37  -- = -math.floor(MOISTURE_TOP_RESERVE / 2) = -37
 -- Generic analytical fudge (non-CS mods): see PartyHud_CSFudge.
 local CS_FUDGE = 1.0
 
@@ -368,6 +372,18 @@ local function layout_badges(badgearray)
   if HAS_COMBINED_STATUS and cs_heart_x ~= nil then
     cs_vstartx_override = cs_heart_x + CS_NUDGE
   end
+  -- CS Y override: replace the dynamic moisture/Abigail/Wigfrid second-row dodge with a fixed
+  -- constant Y offset (CS_Y_OFFSET, default = -(MOISTURE_TOP_RESERVE/2) = -37). Applied ALWAYS
+  -- when CS is active regardless of moisture/rain state. The dynamic second_row_cols/reserve is
+  -- suppressed (= 0) for the CS path so there is no per-column top variation.
+  local cs_second_row_cols = second_row_cols
+  local cs_second_row_reserve = second_row_reserve
+  local cs_vstarty_override = nil
+  if HAS_COMBINED_STATUS then
+    cs_vstarty_override = VERT_Y + CS_Y_OFFSET
+    cs_second_row_cols = 0    -- no per-column dodge in CS path (fixed Y handles it)
+    cs_second_row_reserve = 0
+  end
   -- v2026.8: an equipped backpack overlaps our HUD differently per UI mode (see backpack_layout_mode):
   --  * Mode A (1, side/floating): its container hugs the right screen edge over our badges -> shift ALL
   --    columns LEFT. That moves col 0 off the Map(M) button, so col 0 then uses the small `free` reserve
@@ -387,11 +403,11 @@ local function layout_badges(badgearray)
     screen_h = scrnh,
     hudscale = hudscale,
     bpmode = backpack_layout_mode(),
-    second_row_cols = second_row_cols,
-    second_row_reserve = second_row_reserve,
+    second_row_cols = cs_second_row_cols,
+    second_row_reserve = cs_second_row_reserve,
     -- layout constants (modmain stays the single source of truth; passed in, not hardcoded in the module)
     vert_x = VERT_X,
-    vert_y = VERT_Y,
+    vert_y = cs_vstarty_override ~= nil and cs_vstarty_override or VERT_Y,
     vert_gap = VERT_GAP,
     vert_gap_compact = VERT_GAP_COMPACT,
     vert_col_w = VERT_COL_W,
@@ -403,7 +419,7 @@ local function layout_badges(badgearray)
     cs_factor = cs_factor,
     cs_sp_x = cs_sp_x,
     cs_fudge = CS_FUDGE,
-    cs_vstartx_override = cs_vstartx_override, -- CS heart-relative override (nil = use analytical)
+    cs_vstartx_override = cs_vstartx_override, -- CS heart-relative X override (nil = use analytical)
   }
   local positions = layoutmath.compute_badge_positions(opts)
   for _, p in ipairs(positions) do
@@ -462,6 +478,22 @@ GLOBAL.PartyHud_CSNudge = function(n)
   end
   print("[PartyHud] CS_NUDGE = " .. tostring(CS_NUDGE))
   return CS_NUDGE
+end
+-- luacheck: pop
+
+-- [DEBUG/util] CS-specific: nudge the fixed Y offset (negative = push badges DOWN, positive = up).
+-- Default CS_Y_OFFSET = -37 (half of MOISTURE_TOP_RESERVE). Relayouts live.
+-- luacheck: push ignore 122
+GLOBAL.PartyHud_CSYNudge = function(n)
+  CS_Y_OFFSET = n ~= nil and n or -37
+  local p = _G.ThePlayer
+  local sd = p ~= nil and p.HUD ~= nil and p.HUD.controls ~= nil and p.HUD.controls.status or nil
+  if sd ~= nil and sd.badgearray ~= nil then
+    layout_badges(sd.badgearray)
+  end
+  print("[PartyHud] CS_Y_OFFSET = " .. tostring(CS_Y_OFFSET)
+    .. "  (vstarty = " .. tostring(VERT_Y + CS_Y_OFFSET) .. ")")
+  return CS_Y_OFFSET
 end
 -- luacheck: pop
 
