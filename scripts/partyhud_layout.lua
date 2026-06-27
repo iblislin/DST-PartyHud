@@ -170,14 +170,19 @@ function M.compute_badge_positions(opts)
     vstartx, vstarty = opts.phud_xpos, opts.phud_ypos
   end
   local vgap = opts.show_substatus and opts.vert_gap or opts.vert_gap_compact
+  local bpmode = opts.bpmode
   -- mod-aware re-anchor (CS rescales tr_scale_root AND repositions sidepanel); no-op when cs_factor nil.
   -- cs_vstartx_override: CS heart-relative alignment (beats the analytical formula when set).
-  if opts.cs_vstartx_override ~= nil then
+  -- EXCEPTION: Mode A (bpmode==1) skips the CS override — the backpack shift goal is an absolute
+  -- screen position (clear the floating backpack container) that is independent of CS's X alignment.
+  -- Applying cs_vstartx_override (heart_x=40) then shifting left by backpack_shift_x=100 gives -60
+  -- instead of the vanilla -100, leaving badges under the backpack. Use vanilla vert_x in Mode A so
+  -- the shift produces the same result as without CS.
+  if bpmode ~= 1 and opts.cs_vstartx_override ~= nil then
     vstartx = opts.cs_vstartx_override
-  elseif opts.cs_factor ~= nil then
+  elseif bpmode ~= 1 and opts.cs_factor ~= nil then
     vstartx = M.cs_compensated_vstartx(vstartx, opts.cs_factor, opts.cs_sp_x, opts.cs_fudge)
   end
-  local bpmode = opts.bpmode
   if bpmode == 1 then
     vstartx = vstartx - opts.backpack_shift_x
   end

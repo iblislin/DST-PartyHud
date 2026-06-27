@@ -367,4 +367,55 @@ describe("partyhud layout math", function()
       end
     end)
   end)
+
+  describe("CS + backpack Mode A interaction in compute_badge_positions", function()
+    -- Core assertion: in Mode A (bpmode=1), CS cs_vstartx_override is IGNORED.
+    -- The shifted column lands at the same x as vanilla (vert_x - backpack_shift_x),
+    -- regardless of heart_x / cs_vstartx_override.
+    local function make_opts(overrides)
+      local base = {
+        layout_mode = 2, position_mode = 2,
+        phud_xpos = 0, phud_ypos = 0,
+        badge_count = 1, show_substatus = false,
+        screen_w = 1280, screen_h = 720, hudscale = 1,
+        bpmode = 0, second_row_cols = 0, second_row_reserve = 0,
+        vert_x = 0, vert_y = -130,
+        vert_gap = -120, vert_gap_compact = -90, vert_col_w = 80,
+        vert_bottom_reserve = 65, vert_bottom_reserve_free = 40,
+        backpack_shift_x = 100, backpack_bottom_extra = 20,
+        horizontal_step = -70,
+        cs_factor = nil, cs_sp_x = nil, cs_fudge = 1,
+        cs_vstartx_override = nil,
+      }
+      for k, v in pairs(overrides) do base[k] = v end
+      return base
+    end
+
+    it("vanilla no-backpack: x = vert_x = 0", function()
+      local r = M.compute_badge_positions(make_opts({}))
+      assert.are.equal(0, r[1].x)
+    end)
+
+    it("vanilla Mode A: x = vert_x - backpack_shift_x = -100", function()
+      local r = M.compute_badge_positions(make_opts({ bpmode = 1 }))
+      assert.are.equal(-100, r[1].x)
+    end)
+
+    it("CS no-backpack: x = cs_vstartx_override (heart_x=40)", function()
+      local r = M.compute_badge_positions(make_opts({ cs_vstartx_override = 40 }))
+      assert.are.equal(40, r[1].x)
+    end)
+
+    it("CS Mode A: x = vert_x - backpack_shift_x = -100 (same as vanilla, NOT 40-100=-60)", function()
+      -- cs_vstartx_override must be IGNORED in Mode A
+      local r = M.compute_badge_positions(make_opts({ bpmode = 1, cs_vstartx_override = 40 }))
+      assert.are.equal(-100, r[1].x)
+    end)
+
+    it("CS Mode A result equals vanilla Mode A (shift clears backpack identically)", function()
+      local vanilla = M.compute_badge_positions(make_opts({ bpmode = 1 }))
+      local cs      = M.compute_badge_positions(make_opts({ bpmode = 1, cs_vstartx_override = 40 }))
+      assert.are.equal(vanilla[1].x, cs[1].x)
+    end)
+  end)
 end)
