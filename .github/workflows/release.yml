@@ -1,19 +1,36 @@
 name: release
 
 on:
-  push:
-    tags:
-      - "v*"
+  workflow_run:
+    # Only build and publish the release artifact after ALL three gate workflows have
+    # succeeded on the same commit. The job-level `if` further restricts to tag refs.
+    # Behaviour: a plain branch push triggers the gate workflows but NOT this release
+    # (the head_branch check below rejects non-tag refs). A tag push causes the gate
+    # workflows to run on the tag's commit; once all three succeed, this workflow fires.
+    workflows:
+      - busted
+      - luacheck
+      - stylua
+    types:
+      - completed
 
 permissions:
   contents: write   # least privilege: create release + upload assets via GITHUB_TOKEN
 
 jobs:
   release:
+    # Only run when:
+    #   1. The triggering workflow succeeded.
+    #   2. The run was for a tag (head_branch is the tag name, e.g. "v2026.14").
+    if: >
+      github.event.workflow_run.conclusion == 'success' &&
+      startsWith(github.event.workflow_run.head_branch, 'v')
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-        # default fetch-depth: 1 is fine — we package the tagged tree, not history.
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
+          # default fetch-depth: 1 is fine — we package the tagged tree, not history.
 
       - name: Validate release manifest (production-accident guard)
         # Fails the release if a required module is not covered by release-manifest.txt,
