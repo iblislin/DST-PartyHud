@@ -794,14 +794,20 @@ function PartyBadge:SetForeign(isforeign, label, sameshard)
   -- text elements: name + the HP / sub-ring numbers. The NAME is owned by _apply_name_colour
   -- (reconciles the player colour with the foreign dim); call it after self.foreign is set above.
   self:_apply_name_colour()
+  -- For num: if the badge is currently focused (mouse hover), keep full alpha so the number stays
+  -- readable. SetForeign fires on every UpdateBadges tick, which would otherwise re-dim the num
+  -- while the cursor is still over it.
+  local num_a = (self.focus and FULL_ALPHA) or a
   if self.num ~= nil then
-    self.num:SetColour(1, 1, 1, a)
+    self.num:SetColour(1, 1, 1, num_a)
   end
   if self.hungerbadge ~= nil and self.hungerbadge.num ~= nil then
-    self.hungerbadge.num:SetColour(1, 1, 1, a)
+    local hb_a = (self.hungerbadge.focus and FULL_ALPHA) or a
+    self.hungerbadge.num:SetColour(1, 1, 1, hb_a)
   end
   if self.sanitybadge ~= nil and self.sanitybadge.num ~= nil then
-    self.sanitybadge.num:SetColour(1, 1, 1, a)
+    local sb_a = (self.sanitybadge.focus and FULL_ALPHA) or a
+    self.sanitybadge.num:SetColour(1, 1, 1, sb_a)
   end
 
   if self.foreign then
