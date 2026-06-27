@@ -559,6 +559,11 @@ GLOBAL.PartyHud_CSDebug = function()
   end
   local vanilla_gap = heart_lx ~= nil and (VERT_X - heart_lx) or nil
   local cs_vstartx = heart_lx ~= nil and (heart_lx + CS_NUDGE) or nil
+  local factor = nil
+  if p3 ~= nil and p3.inst ~= nil and hs ~= nil and hs ~= 0 then
+    local ok, fx = _G.pcall(function() return p3.inst.UITransform:GetScale() end)
+    factor = (ok and fx ~= nil) and (fx / hs) or nil
+  end
   print("[PartyHud]   cs_factor (topright_local_scale/hs):", tostring(factor),
     "(expect CS HUDSCALEFACTOR, e.g. 1.1 for 110%)")
   print("[PartyHud]   cs_sp_x (sidepanel local X):", tostring(sp_lx),
