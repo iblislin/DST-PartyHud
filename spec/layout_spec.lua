@@ -307,4 +307,115 @@ describe("partyhud layout math", function()
       assert.are.same({ index = 4, x = -80, y = -130, col = 1, row = 0 }, r[4])
     end)
   end)
+
+  describe("cs_compensated_vstartx", function()
+    local function r2(x)
+      return math.floor(x * 100 + 0.5) / 100
+    end
+    -- Invariance: factor * (cs_sp_x + comp) = CS_SIDEPANEL_X + vstartx
+    -- → comp = (CS_SIDEPANEL_X + vstartx) / factor - cs_sp_x
+    -- cs_sp_x=nil defaults to CS_SIDEPANEL_X (vanilla sidepanel; only scale compensation)
+    -- cs_sp_x=-100 = CS case (CS moves sidepanel from -80 to -100)
+    it("factor nil / <=0 -> unchanged", function()
+      assert.are.equal(0, M.cs_compensated_vstartx(0, nil))
+      assert.are.equal(-100, M.cs_compensated_vstartx(-100, 0))
+      assert.are.equal(-100, M.cs_compensated_vstartx(-100, -0.5))
+    end)
+    it("factor 1 + vanilla sp_x (nil) -> unchanged (no CS effect)", function()
+      assert.are.equal(0, M.cs_compensated_vstartx(0, 1))
+      assert.are.equal(-100, M.cs_compensated_vstartx(-100, 1))
+    end)
+    it("factor 1 + CS sp_x (-100) -> compensates +20 for sidepanel shift alone", function()
+      -- CS moves sidepanel -80 -> -100 even at HUDSCALEFACTOR=1
+      -- target = (-80 + 0)/1 - (-100) = 20; result = 0 + 20 = 20
+      assert.are.equal(20, r2(M.cs_compensated_vstartx(0, 1, -100)))
+    end)
+    it("factor 1.25 + vanilla sp_x: scale only compensation", function()
+      -- target = (-80+0)/1.25 - (-80) = -64+80 = 16
+      assert.are.equal(16, r2(M.cs_compensated_vstartx(0, 1.25, -80)))
+    end)
+    it("factor 1.25 + CS sp_x (-100): scale + position compensation", function()
+      -- target = (-80+0)/1.25 - (-100) = -64+100 = 36
+      assert.are.equal(36, r2(M.cs_compensated_vstartx(0, 1.25, -100)))
+    end)
+    it("factor 0.75 + vanilla sp_x: scale compensation LEFT", function()
+      -- target = (-80+0)/0.75 - (-80) = -106.67+80 = -26.67
+      assert.are.equal(-26.67, r2(M.cs_compensated_vstartx(0, 0.75, -80)))
+    end)
+    it("fudge scales the correction", function()
+      -- factor=1.25, cs_sp_x=-80: target=16, delta=16; fudge=2 -> 0+16*2=32
+      assert.are.equal(32, r2(M.cs_compensated_vstartx(0, 1.25, -80, 2)))
+    end)
+    it("non-zero vstartx (Minimap anchor)", function()
+      -- factor=1.25, cs_sp_x=-100: target=(-80-100)/1.25-(-100)=-144+100=-44; result=-100+56=-44
+      assert.are.equal(-44, r2(M.cs_compensated_vstartx(-100, 1.25, -100)))
+    end)
+    it("screen-x INVARIANCE: compensated column lands at SAME screen x as vanilla, any F and cs_sp_x", function()
+      local function screen_x_vanilla(vstartx)
+        return M.CS_SIDEPANEL_X + vstartx
+      end
+      local function screen_x_cs(vstartx, factor, cs_sp_x)
+        return factor * (cs_sp_x + vstartx)
+      end
+      for _, F in ipairs({ 0.75, 1.0, 1.1, 1.25, 1.5 }) do
+        for _, csx in ipairs({ -80, -100 }) do -- vanilla sp_x and CS sp_x
+          for _, vanilla_vstartx in ipairs({ 0, -100, -650 }) do
+            local comp = M.cs_compensated_vstartx(vanilla_vstartx, F, csx)
+            assert.are.equal(r2(screen_x_vanilla(vanilla_vstartx)), r2(screen_x_cs(comp, F, csx)))
+          end
+        end
+      end
+    end)
+  end)
+
+  describe("CS + backpack Mode A interaction in compute_badge_positions", function()
+    -- Core assertion: in Mode A (bpmode=1), CS cs_vstartx_override is IGNORED.
+    -- The shifted column lands at the same x as vanilla (vert_x - backpack_shift_x),
+    -- regardless of heart_x / cs_vstartx_override.
+    local function make_opts(overrides)
+      local base = {
+        layout_mode = 2, position_mode = 2,
+        phud_xpos = 0, phud_ypos = 0,
+        badge_count = 1, show_substatus = false,
+        screen_w = 1280, screen_h = 720, hudscale = 1,
+        bpmode = 0, second_row_cols = 0, second_row_reserve = 0,
+        vert_x = 0, vert_y = -130,
+        vert_gap = -120, vert_gap_compact = -90, vert_col_w = 80,
+        vert_bottom_reserve = 65, vert_bottom_reserve_free = 40,
+        backpack_shift_x = 100, backpack_bottom_extra = 20,
+        horizontal_step = -70,
+        cs_factor = nil, cs_sp_x = nil, cs_fudge = 1,
+        cs_vstartx_override = nil,
+      }
+      for k, v in pairs(overrides) do base[k] = v end
+      return base
+    end
+
+    it("vanilla no-backpack: x = vert_x = 0", function()
+      local r = M.compute_badge_positions(make_opts({}))
+      assert.are.equal(0, r[1].x)
+    end)
+
+    it("vanilla Mode A: x = vert_x - backpack_shift_x = -100", function()
+      local r = M.compute_badge_positions(make_opts({ bpmode = 1 }))
+      assert.are.equal(-100, r[1].x)
+    end)
+
+    it("CS no-backpack: x = cs_vstartx_override (heart_x=40)", function()
+      local r = M.compute_badge_positions(make_opts({ cs_vstartx_override = 40 }))
+      assert.are.equal(40, r[1].x)
+    end)
+
+    it("CS Mode A: x = vert_x - backpack_shift_x = -100 (same as vanilla, NOT 40-100=-60)", function()
+      -- cs_vstartx_override must be IGNORED in Mode A
+      local r = M.compute_badge_positions(make_opts({ bpmode = 1, cs_vstartx_override = 40 }))
+      assert.are.equal(-100, r[1].x)
+    end)
+
+    it("CS Mode A result equals vanilla Mode A (shift clears backpack identically)", function()
+      local vanilla = M.compute_badge_positions(make_opts({ bpmode = 1 }))
+      local cs      = M.compute_badge_positions(make_opts({ bpmode = 1, cs_vstartx_override = 40 }))
+      assert.are.equal(vanilla[1].x, cs[1].x)
+    end)
+  end)
 end)

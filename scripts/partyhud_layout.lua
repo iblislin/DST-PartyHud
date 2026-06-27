@@ -10,6 +10,40 @@ M.MAX_PROP = 1.25 -- MAX_HUD_SCALE upscale cap
 M.BADGE_BOTTOM = 60 -- a badge's sub-ring bottom, below its origin
 M.PERCOL_FALLBACK = 6 -- safe per-column count if screen/HUD scale is unreadable
 
+-- Real vanilla widget tree (non-splitscreen, controls.lua verified):
+--   Widget("side")  [SCALEMODE_PROPORTIONAL]
+--   └── tr_scale_root ("tr_scale_root")  [SetScale(hudscale) in SetHUDSize; = self.topright_root]
+--       └── sidepanel ("sidepanel")  [vanilla pos=(-80,-60,0); CS moves to (-100,-70,0)]
+--           └── StatusDisplays  [pos=(0,-110,0), no SetScale → local scale=1]
+--               └── our badge
+-- CS makes TWO changes (Combined-Status/modmain.lua verified):
+--   1. self.topright_root:SetScale(GetHUDScale() * HUDSCALEFACTOR)  → cs_factor = HUDSCALEFACTOR
+--   2. self.sidepanel:SetPosition(-100, -70)                        → sidepanel moves left by 20
+-- cs_factor = tr_scale_root UITransform:GetScale() / GetHUDScale() = HUDSCALEFACTOR.
+-- cs_sp_x   = live sidepanel UITransform:GetLocalPosition().x  (= -80 vanilla, -100 with CS).
+-- Widget("side") carries a SCALEMODE_PROPORTIONAL engine scale; use UITransform:GetScale() (local)
+-- not Widget:GetScale() (compound) on tr_scale_root to avoid absorbing it into cs_factor.
+M.CS_SIDEPANEL_X = -80 -- sidepanel local X vanilla (controls.lua:135 SetPosition(-80,-60,0))
+
+-- Re-anchor the vertical column's start-x for the two Combined Status changes.
+-- Invariance: factor * (cs_sp_x + comp_vstartx) = CS_SIDEPANEL_X + vstartx (vanilla screen pos)
+-- → comp_vstartx = (CS_SIDEPANEL_X + vstartx) / factor - cs_sp_x
+-- cs_sp_x nil → defaults to CS_SIDEPANEL_X (vanilla sidepanel pos → no position delta).
+-- factor nil / <= 0 → no compensation. fudge scales the entire correction (1 = full).
+-- NOTE: topright_root rescale also drifts Y; that compensation is DEFERRED.
+function M.cs_compensated_vstartx(vstartx, factor, cs_sp_x, fudge)
+  if factor == nil or factor <= 0 then
+    return vstartx
+  end
+  local eff_sp_x = cs_sp_x ~= nil and cs_sp_x or M.CS_SIDEPANEL_X
+  -- no change needed: vanilla scale + vanilla sidepanel position
+  if factor == 1 and eff_sp_x == M.CS_SIDEPANEL_X then
+    return vstartx
+  end
+  local target = (M.CS_SIDEPANEL_X + vstartx) / factor - eff_sp_x
+  return vstartx + (target - vstartx) * (fudge or 1)
+end
+
 -- badges that fit in one column given screen geometry. >= 1 (or PERCOL_FALLBACK if screen/scale
 -- unreadable). vgap is the NEGATIVE row gap (rows go down); bottom_reserve is the bottom keep-out.
 -- Dividing by `prop` is the v2026.8 proportional-scale fix: a sub-720 window shrinks the real badges,
@@ -137,6 +171,18 @@ function M.compute_badge_positions(opts)
   end
   local vgap = opts.show_substatus and opts.vert_gap or opts.vert_gap_compact
   local bpmode = opts.bpmode
+  -- mod-aware re-anchor (CS rescales tr_scale_root AND repositions sidepanel); no-op when cs_factor nil.
+  -- cs_vstartx_override: CS heart-relative alignment (beats the analytical formula when set).
+  -- EXCEPTION: Mode A (bpmode==1) skips the CS override — the backpack shift goal is an absolute
+  -- screen position (clear the floating backpack container) that is independent of CS's X alignment.
+  -- Applying cs_vstartx_override (heart_x=40) then shifting left by backpack_shift_x=100 gives -60
+  -- instead of the vanilla -100, leaving badges under the backpack. Use vanilla vert_x in Mode A so
+  -- the shift produces the same result as without CS.
+  if bpmode ~= 1 and opts.cs_vstartx_override ~= nil then
+    vstartx = opts.cs_vstartx_override
+  elseif bpmode ~= 1 and opts.cs_factor ~= nil then
+    vstartx = M.cs_compensated_vstartx(vstartx, opts.cs_factor, opts.cs_sp_x, opts.cs_fudge)
+  end
   if bpmode == 1 then
     vstartx = vstartx - opts.backpack_shift_x
   end

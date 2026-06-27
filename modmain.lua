@@ -58,7 +58,9 @@ local low_hp_threshold = (GetModConfigData("low_hp_alert", true) or 0) / 100 -- 
 local avatar_style_cfg = GetModConfigData("avatar_style", true)
 local name_colour_on = (GetModConfigData("name_colour", true) ~= 0)
 -- [vertical layout tunables] edit these then restart client; only used when layout=Vertical
-local VERT_X = 0 -- horizontal pos (more negative = further left)
+local VERT_X = 0 -- horizontal pos (more negative = further left); vanilla position aligned to
+-- StatusDisplays column3 (sanity badge, x=0). The CS path overrides this via cs_vstartx_override
+-- (aligned to the vanilla HP badge X instead), so this only affects the non-CS layout.
 local VERT_Y = -130 -- y of the FIRST (top) badge; lower number = lower on screen
 local VERT_GAP = -120 -- gap between badges (negative = each next one goes DOWN; sized so a badge's
 -- name no longer overlaps the hunger/sanity sub-rings of the badge above)
@@ -66,7 +68,7 @@ local VERT_GAP_COMPACT = -90 -- tighter gap for the HP-only (no sub-rings) badge
 local VERT_COL_W = 80 -- horizontal spacing when the column wraps to a new one (see compute_percol)
 local VERT_BOTTOM_RESERVE = 65 -- badge-local units kept clear at the bottom for the game's map(M)
 -- button. FIXED (not per-row): the compact gap is tighter, so a
--- per-row reserve would pack an extra badge into the button. Larger
+-- per-row reserve would pack an extra badge into the column. Larger
 -- = wraps a column one badge sooner.
 local VERT_BOTTOM_RESERVE_FREE = 40 -- bottom keep-out for columns 2+ (further LEFT than the rightmost
 -- column): the game's Map(M) button only sits under the FIRST
@@ -76,7 +78,7 @@ local MOISTURE_TOP_RESERVE = 75 -- badge-local units to push the dodged column(s
 local INSPIRATION_TOP_RESERVE = 90 -- bigger top push when Wigfrid's inspiration badge (y-130, deeper than the moisture meter) is present -- it needs more clearance than the moisture/Abigail case. Visually tuned.
 local BACKPACK_SHIFT_X = 100 -- badge-local units to shift ALL columns LEFT when a NON-integrated (side)
 -- backpack is equipped: its floating container hugs the right screen edge
--- and would cover our badges. Visually tuned.
+-- and would cover our badges. Visually tuned for VERT_X=0.
 local BACKPACK_BOTTOM_EXTRA = 20 -- extra badge-local units added to the columns-2+ bottom reserve when an
 -- INTEGRATED backpack is equipped (the bottom inventory bar grows taller).
 local second_row_cols = 0 -- client-local: how many of OUR leading columns the top-right status second-row band spans (0/1/2; see status_second_row). Those columns get their top pushed down to dodge the band (moisture meter / Abigail / inspiration).
@@ -88,6 +90,29 @@ local last_bpmode = -1 -- client-local: last applied backpack UI mode (see backp
 -- and by that console fn -- NOT by UpdateBadges, which reads the per-badge self.avatar_style set by
 -- SetAvatarStyle. resolve_avatar_style maps nil/this int -> "off"/"corner"/"centre".
 local current_avatar_style = avatar_style_cfg
+
+-- v2026.x mod-aware layout: Combined Status (Workshop 376333686) rescales topright_root, drifting our
+-- right-anchored vertical column. Detect it at load (KnownModIndex is populated by mod-load time) so
+-- layout_badges can read the live scale + compensate. Nil-guarded: any failure -> false -> no compensation.
+local HAS_COMBINED_STATUS = false
+do
+  local kmi = GLOBAL.KnownModIndex
+  if kmi ~= nil and kmi.IsModEnabled ~= nil then
+    local ok, enabled = GLOBAL.pcall(function()
+      return kmi:IsModEnabled("workshop-376333686")
+    end)
+    HAS_COMBINED_STATUS = (ok and enabled) and true or false
+  end
+end
+-- CS-specific heart-alignment nudge: pixel offset added to the CS HP-badge-relative anchor.
+-- 0 = our column aligns relative to HP badge maintaining the vanilla gap; tune live via PartyHud_CSNudge.
+local CS_NUDGE = 0
+-- CS-specific Y offset: fixed downward push applied ALWAYS when CS is active (replaces the dynamic
+-- moisture/Abigail/Wigfrid second-row dodge for the CS path). Default = MOISTURE_TOP_RESERVE / 2.
+-- Negative = push DOWN (badges lower); tune live via PartyHud_CSYNudge.
+local CS_Y_OFFSET = -37  -- = -math.floor(MOISTURE_TOP_RESERVE / 2) = -37
+-- Generic analytical fudge (non-CS mods): see PartyHud_CSFudge.
+local CS_FUDGE = 1.0
 
 --imports partybadge
 local phud_custombadge = _G.require("widgets/partybadge")
@@ -294,6 +319,70 @@ local function layout_badges(badgearray)
   if GLOBAL.TheFrontEnd ~= nil and GLOBAL.TheFrontEnd.GetHUDScale ~= nil then
     hudscale = GLOBAL.TheFrontEnd:GetHUDScale() or 1
   end
+  -- mod-aware X re-anchor. Widget tree (controls.lua non-splitscreen):
+  --   Widget("side") [SCALEMODE_PROPORTIONAL]
+  --   └── tr_scale_root [SetScale(hudscale) in SetHUDSize]
+  --       └── sidepanel [vanilla pos=(-80,-60); CS moves to (-100,-70)]
+  --           └── StatusDisplays [pos=(0,-110), scale=1]
+  --               └── our badge
+  -- Always read tr_scale_root local scale for generic mod support; CS-specific path reads the vanilla
+  -- HP badge (sd.heart) for relative alignment instead of the analytical formula.
+  local cs_factor = nil
+  local cs_heart_x = nil -- CS only: vanilla HP badge local X in StatusDisplays
+  local cs_sp_x = nil    -- generic: live sidepanel local X (analytical formula fallback)
+  if badgearray[1] ~= nil then
+    local sd = badgearray[1].parent
+    local sidepanel = sd ~= nil and sd.parent or nil
+    local topright = sidepanel ~= nil and sidepanel.parent or nil
+    -- cs_factor: tr_scale_root UITransform:GetScale() (local only — avoids Widget("side")'s
+    -- SCALEMODE_PROPORTIONAL compound scale contaminating the factor).
+    if topright ~= nil and topright.inst ~= nil and hudscale ~= nil and hudscale > 0 then
+      local ok, sx, _, _ = GLOBAL.pcall(function()
+        return topright.inst.UITransform:GetScale()
+      end)
+      if ok and sx ~= nil and sx > 0 then
+        cs_factor = sx / hudscale
+      end
+    end
+    if HAS_COMBINED_STATUS then
+      -- CS-specific: read vanilla HP badge X (sd.heart) for relative alignment.
+      -- Maintains vanilla relative gap between our column and HP badge at any HUDSCALEFACTOR.
+      if sd ~= nil and sd.heart ~= nil and sd.heart.inst ~= nil then
+        local ok, hx, _, _ = GLOBAL.pcall(function()
+          return sd.heart.inst.UITransform:GetLocalPosition()
+        end)
+        if ok and hx ~= nil then cs_heart_x = hx end
+      end
+    else
+      -- Generic fallback: live sidepanel local X for the analytical formula.
+      if sidepanel ~= nil and sidepanel.inst ~= nil then
+        local ok, lx, _, _ = GLOBAL.pcall(function()
+          return sidepanel.inst.UITransform:GetLocalPosition()
+        end)
+        if ok and lx ~= nil then cs_sp_x = lx end
+      end
+    end
+  end
+  -- Apply X re-anchor before passing to compute_badge_positions.
+  -- CS path: align our column to vanilla HP badge X + CS_NUDGE (tune live via PartyHud_CSNudge).
+  --   vstartx = heart_local_x + CS_NUDGE  → our first badge sits at the HP badge's X position.
+  -- Generic path: analytical formula (cs_factor + cs_sp_x + CS_FUDGE).
+  local cs_vstartx_override = nil
+  if HAS_COMBINED_STATUS and cs_heart_x ~= nil then
+    cs_vstartx_override = cs_heart_x + CS_NUDGE
+  end
+  -- CS Y override: replace the dynamic moisture/Abigail/Wigfrid second-row dodge with a fixed
+  -- constant Y offset (CS_Y_OFFSET, default = -(MOISTURE_TOP_RESERVE/2) = -37). Applied ALWAYS
+  -- when CS is active regardless of moisture/rain state. The dynamic second_row_cols/reserve is
+  -- suppressed (= 0) for the CS path so there is no per-column top variation.
+  local cs_second_row_cols = second_row_cols
+  local cs_second_row_reserve = second_row_reserve
+  local cs_vstarty_override = nil
+  if HAS_COMBINED_STATUS then
+    cs_vstarty_override = VERT_Y + CS_Y_OFFSET
+    cs_second_row_cols = 0    -- no per-column dodge in CS path (fixed Y handles it)
+    cs_second_row_reserve = 0
+  end
   -- v2026.8: an equipped backpack overlaps our HUD differently per UI mode (see backpack_layout_mode):
   --  * Mode A (1, side/floating): its container hugs the right screen edge over our badges -> shift ALL
   --    columns LEFT. That moves col 0 off the Map(M) button, so col 0 then uses the small `free` reserve
@@ -313,11 +402,11 @@ local function layout_badges(badgearray)
     screen_h = scrnh,
     hudscale = hudscale,
     bpmode = backpack_layout_mode(),
-    second_row_cols = second_row_cols,
-    second_row_reserve = second_row_reserve,
+    second_row_cols = cs_second_row_cols,
+    second_row_reserve = cs_second_row_reserve,
     -- layout constants (modmain stays the single source of truth; passed in, not hardcoded in the module)
     vert_x = VERT_X,
-    vert_y = VERT_Y,
+    vert_y = cs_vstarty_override ~= nil and cs_vstarty_override or VERT_Y,
     vert_gap = VERT_GAP,
     vert_gap_compact = VERT_GAP_COMPACT,
     vert_col_w = VERT_COL_W,
@@ -326,6 +415,10 @@ local function layout_badges(badgearray)
     backpack_shift_x = BACKPACK_SHIFT_X,
     backpack_bottom_extra = BACKPACK_BOTTOM_EXTRA,
     horizontal_step = -70, -- per-badge x step in the horizontal row
+    cs_factor = cs_factor,
+    cs_sp_x = cs_sp_x,
+    cs_fudge = CS_FUDGE,
+    cs_vstartx_override = cs_vstartx_override, -- CS heart-relative X override (nil = use analytical)
   }
   local positions = layoutmath.compute_badge_positions(opts)
   for _, p in ipairs(positions) do
@@ -369,6 +462,116 @@ GLOBAL.PartyHud_Layout = function(n)
   end
   print("[PartyHud] layout = " .. tostring(layout) .. (layout == 2 and " (Vertical)" or " (Horizontal)"))
   return layout
+end
+-- luacheck: pop
+
+-- [DEBUG/util] CS-specific: nudge the heart-relative anchor by N pixels (positive = right, negative = left).
+-- 0 = our column maintains the exact vanilla relative gap to the vanilla HP badge. Relayouts live.
+-- luacheck: push ignore 122
+GLOBAL.PartyHud_CSNudge = function(n)
+  CS_NUDGE = n or 0
+  local p = _G.ThePlayer
+  local sd = p ~= nil and p.HUD ~= nil and p.HUD.controls ~= nil and p.HUD.controls.status or nil
+  if sd ~= nil and sd.badgearray ~= nil then
+    layout_badges(sd.badgearray)
+  end
+  print("[PartyHud] CS_NUDGE = " .. tostring(CS_NUDGE))
+  return CS_NUDGE
+end
+-- luacheck: pop
+
+-- [DEBUG/util] CS-specific: nudge the fixed Y offset (negative = push badges DOWN, positive = up).
+-- Default CS_Y_OFFSET = -37 (half of MOISTURE_TOP_RESERVE). Relayouts live.
+-- luacheck: push ignore 122
+GLOBAL.PartyHud_CSYNudge = function(n)
+  CS_Y_OFFSET = n ~= nil and n or -37
+  local p = _G.ThePlayer
+  local sd = p ~= nil and p.HUD ~= nil and p.HUD.controls ~= nil and p.HUD.controls.status or nil
+  if sd ~= nil and sd.badgearray ~= nil then
+    layout_badges(sd.badgearray)
+  end
+  print("[PartyHud] CS_Y_OFFSET = " .. tostring(CS_Y_OFFSET)
+    .. "  (vstarty = " .. tostring(VERT_Y + CS_Y_OFFSET) .. ")")
+  return CS_Y_OFFSET
+end
+-- luacheck: pop
+
+-- [DEBUG/util] tune the Combined-Status generic analytical fudge (non-CS mods). 1.0 = as-is.
+-- luacheck: push ignore 122
+GLOBAL.PartyHud_CSFudge = function(f)
+  CS_FUDGE = f or 1.0
+  local p = _G.ThePlayer
+  local sd = p ~= nil and p.HUD ~= nil and p.HUD.controls ~= nil and p.HUD.controls.status or nil
+  if sd ~= nil and sd.badgearray ~= nil then
+    layout_badges(sd.badgearray)
+  end
+  print("[PartyHud] CS X-fudge = " .. tostring(CS_FUDGE))
+  return CS_FUDGE
+end
+-- luacheck: pop
+
+-- [DEBUG/util] diagnose the Combined Status X compensation widget tree. Prints each parent's name,
+-- scale, and the computed cs_factor so mismatches in the assumed tree (CS_SIDEPANEL_X, CS_SD_SCALE,
+-- or the node that topright_root actually is) can be spotted in client_log. Client-only.
+-- luacheck: push ignore 122
+GLOBAL.PartyHud_CSDebug = function()
+  local p = _G.ThePlayer
+  local sd = p ~= nil and p.HUD ~= nil and p.HUD.controls ~= nil and p.HUD.controls.status or nil
+  local b = sd ~= nil and sd.badgearray ~= nil and sd.badgearray[1] or nil
+  if b == nil then
+    print("[PartyHud] CSDebug: no badge found (no players?)")
+    return
+  end
+  local p1 = b.parent
+  local p2 = p1 ~= nil and p1.parent or nil
+  local p3 = p2 ~= nil and p2.parent or nil
+  local p4 = p3 ~= nil and p3.parent or nil
+  local hs = (_G.TheFrontEnd ~= nil and _G.TheFrontEnd.GetHUDScale ~= nil)
+    and _G.TheFrontEnd:GetHUDScale() or nil
+  local function sx(w)
+    if w == nil or w.inst == nil then return "nil" end
+    local ok, lx, _, _ = _G.pcall(function() return w.inst.UITransform:GetScale() end)
+    local ok2, wx = _G.pcall(function() local s = w:GetScale(); return (type(s)=="number") and s or s.x end)
+    return "loose=" .. (ok and tostring(lx) or "err") .. " compound=" .. (ok2 and tostring(wx) or "err")
+  end
+  local function wname(w)
+    if w == nil then return "nil" end
+    return tostring(w.name or w.inst and w.inst.name or "?")
+  end
+  print("[PartyHud] == CSDebug widget tree ==")
+  print("[PartyHud]   badge.parent (expect statusdisplays):", wname(p1), "scale.x=" .. sx(p1))
+  -- sidepanel local position: vanilla (-80,-60), CS moves to (-100,-70)
+  local sp_lx, sp_ly
+  if p2 ~= nil and p2.inst ~= nil then
+    local ok, lx, ly = _G.pcall(function() return p2.inst.UITransform:GetLocalPosition() end)
+    sp_lx = ok and lx or nil; sp_ly = ok and ly or nil
+  end
+  print("[PartyHud]   .parent      (expect sidepanel)     :", wname(p2),
+    "scale.x=" .. sx(p2), "localpos=(" .. tostring(sp_lx) .. "," .. tostring(sp_ly) .. ")")
+  print("[PartyHud]   .parent      (expect topright_root) :", wname(p3), "scale.x=" .. sx(p3))
+  print("[PartyHud]   .parent      (expect screen root)   :", wname(p4), "scale.x=" .. sx(p4))
+  print("[PartyHud]   GetHUDScale:", tostring(hs))
+  -- vanilla HP badge (sd.heart) local X in StatusDisplays — the CS heart-alignment anchor
+  local heart_lx = nil
+  if p1 ~= nil and p1.heart ~= nil and p1.heart.inst ~= nil then
+    local ok, hx = _G.pcall(function() return p1.heart.inst.UITransform:GetLocalPosition() end)
+    heart_lx = ok and hx or nil
+  end
+  local vanilla_gap = heart_lx ~= nil and (VERT_X - heart_lx) or nil
+  local cs_vstartx = heart_lx ~= nil and (heart_lx + CS_NUDGE) or nil
+  local factor = nil
+  if p3 ~= nil and p3.inst ~= nil and hs ~= nil and hs ~= 0 then
+    local ok, fx = _G.pcall(function() return p3.inst.UITransform:GetScale() end)
+    factor = (ok and fx ~= nil) and (fx / hs) or nil
+  end
+  print("[PartyHud]   cs_factor (topright_local_scale/hs):", tostring(factor),
+    "(expect CS HUDSCALEFACTOR, e.g. 1.1 for 110%)")
+  print("[PartyHud]   cs_sp_x (sidepanel local X):", tostring(sp_lx),
+    "(vanilla=-80, CS=-100)")
+  print("[PartyHud]   heart local X:", tostring(heart_lx), "vanilla_gap:", tostring(vanilla_gap))
+  print("[PartyHud]   cs_vstartx_override:", tostring(cs_vstartx),
+    "CS_NUDGE:", tostring(CS_NUDGE))
+  print("[PartyHud]   HAS_COMBINED_STATUS:", tostring(HAS_COMBINED_STATUS))
 end
 -- luacheck: pop
 
@@ -1262,47 +1465,33 @@ local function attach_carrier(inst)
     -- CLIENT: decode the blob into the client-side store whenever the server pushes a new one.
     -- Never throw on a bad/version-skewed blob -- log + keep the previous value, mirroring the
     -- server-side receive handler's fail-soft contract.
-    inst:ListenForEvent("partyhud_foreignblobdirty", function()
+    inst:ListenForEvent("partyhud_foreignblobdirty", guarded("xshard:blobdirty", function()
       local blob = inst.partyhud_foreignblob:value()
-      -- net_string starts nil before the server's first :set(); a connect-time sync can fire
-      -- the dirty event with that nil. Skip it (codec.decode is nil-safe, but this avoids a
-      -- spurious "malformed blob" log line before the first publish).
       if blob == nil or blob == "" then
         return
       end
       local version, records = codec.decode(blob)
       if version == nil then
-        -- `records` carries the decode error message on failure here.
         print("[PartyHud] [XSHARD] client dropped malformed carrier blob: " .. tostring(records))
         return
       end
       client_foreign_records = records
       last_foreign_blob_time = GLOBAL.GetTime()
-      _foreign_stale_logged = false -- a fresh blob arrived; re-arm the stale-log for the next outage
+      _foreign_stale_logged = false
       if DEBUG_XSHARD then
         print("[PartyHud] [XSHARD] client got " .. #records .. " foreign records")
       end
-      -- A far teammate reaches this client ONLY via the blob -- there is no `playerentered` event
-      -- for an out-of-view player -- so the blob update MUST itself drive a badge refresh, or the
-      -- new foreign record never renders until some unrelated local event happens to fire
-      -- UpdateBadges. (Same guarded accessor as the client refresh path elsewhere.)
       if _G.ThePlayer ~= nil and _G.ThePlayer.UpdateBadges ~= nil then
         _G.ThePlayer.UpdateBadges()
       end
-    end)
-    -- v2026.11 fix: the heartbeat dirty event fires every broadcast tick (its value always changes),
-    -- so THIS -- not the content-gated blob event -- is what keeps the freshness clock alive while the
-    -- server task runs. A wedged task stops the heartbeat -> the freshness check trips and stale
-    -- cross-shard badges hide (the original intent), WITHOUT hiding idle-but-healthy far teammates.
-    inst:ListenForEvent("partyhud_heartbeatdirty", function()
+    end))
+    inst:ListenForEvent("partyhud_heartbeatdirty", guarded("xshard:heartbeatdirty", function()
       last_foreign_blob_time = GLOBAL.GetTime()
-      _foreign_stale_logged = false -- a live heartbeat re-arms the stale-log for the next real outage
-      -- drive a refresh so a badge hidden during a (real) stale window reappears promptly once the
-      -- heartbeat resumes; same guarded accessor as the blob listener and the client refresh path.
+      _foreign_stale_logged = false
       if _G.ThePlayer ~= nil and _G.ThePlayer.UpdateBadges ~= nil then
         _G.ThePlayer.UpdateBadges()
       end
-    end)
+    end))
   end
 end
 AddPrefabPostInit("forest_network", attach_carrier)
