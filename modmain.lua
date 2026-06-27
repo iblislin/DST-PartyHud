@@ -58,9 +58,9 @@ local low_hp_threshold = (GetModConfigData("low_hp_alert", true) or 0) / 100 -- 
 local avatar_style_cfg = GetModConfigData("avatar_style", true)
 local name_colour_on = (GetModConfigData("name_colour", true) ~= 0)
 -- [vertical layout tunables] edit these then restart client; only used when layout=Vertical
-local VERT_X = 40 -- horizontal pos aligned to the vanilla HP badge (StatusDisplays column4=40);
--- more negative = further left. 40 = same X as the vanilla heart ring for visual consistency,
--- whether CS is installed or not. Previously 0 (= sanity ring column3).
+local VERT_X = 0 -- horizontal pos (more negative = further left); vanilla position aligned to
+-- StatusDisplays column3 (sanity badge, x=0). The CS path overrides this via cs_vstartx_override
+-- (aligned to the vanilla HP badge X instead), so this only affects the non-CS layout.
 local VERT_Y = -130 -- y of the FIRST (top) badge; lower number = lower on screen
 local VERT_GAP = -120 -- gap between badges (negative = each next one goes DOWN; sized so a badge's
 -- name no longer overlaps the hunger/sanity sub-rings of the badge above)
@@ -76,10 +76,9 @@ local VERT_BOTTOM_RESERVE_FREE = 40 -- bottom keep-out for columns 2+ (further L
 -- the screen edge (just this small margin). Smaller = reach further down.
 local MOISTURE_TOP_RESERVE = 75 -- badge-local units to push the dodged column(s)' top DOWN for the moisture (rain) meter (y-115) or Wendy's Abigail badge (y-100, shallower). Visually tuned.
 local INSPIRATION_TOP_RESERVE = 90 -- bigger top push when Wigfrid's inspiration badge (y-130, deeper than the moisture meter) is present -- it needs more clearance than the moisture/Abigail case. Visually tuned.
-local BACKPACK_SHIFT_X = 140 -- badge-local units to shift ALL columns LEFT when a NON-integrated (side)
+local BACKPACK_SHIFT_X = 100 -- badge-local units to shift ALL columns LEFT when a NON-integrated (side)
 -- backpack is equipped: its floating container hugs the right screen edge
--- and would cover our badges. 140 = keeps the post-shift column at the same
--- screen position as the old shift (100) did when VERT_X was 0: 40-140 = -100.
+-- and would cover our badges. Visually tuned for VERT_X=0.
 local BACKPACK_BOTTOM_EXTRA = 20 -- extra badge-local units added to the columns-2+ bottom reserve when an
 -- INTEGRATED backpack is equipped (the bottom inventory bar grows taller).
 local second_row_cols = 0 -- client-local: how many of OUR leading columns the top-right status second-row band spans (0/1/2; see status_second_row). Those columns get their top pushed down to dodge the band (moisture meter / Abigail / inspiration).
