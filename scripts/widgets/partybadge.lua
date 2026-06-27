@@ -58,11 +58,33 @@ local PartyBadge = Class(Badge, function(self, owner)
   -- modern health badge: anim=nil -> status_meter path; iconbuild "status_health"
   -- overrides the heart icon onto the frame; red tint; dont_update_while_paused=true
   Badge._ctor(self, nil, owner, HEALTHBADGE_TINT, "status_health", nil, nil, true)
-  -- Combined Status hooks Badge._ctor via AddClassPostConstruct and adds a stat-number background
-  -- square (self.bg) + scales the badge to 0.9. Both are inappropriate for our compact party rings.
-  -- Hide bg and restore scale immediately after Badge._ctor so CS's hook has no visible effect.
+  -- Combined Status (and potentially other mods) hook Badge._ctor via AddClassPostConstruct.
+  -- CS specifically: adds self.bg (square box), scales badge to 0.9, moves self.num to y=-40.5,
+  -- forces self.num:Show() always, adds self.maxnum (max HP text), and wraps OnGainFocus/
+  -- OnLoseFocus so that OnLoseFocus explicitly calls self.num:Show() after hiding it.
+  -- Restore vanilla state and our desired hover behaviour immediately after Badge._ctor.
   if self.bg ~= nil then self.bg:Hide() end
   self:SetScale(1, 1, 1)
+  if self.num ~= nil then
+    self.num:SetPosition(3, 0, 0) -- vanilla: inside ring at centre (badge.lua:102)
+    self.num:SetScale(1, 1, 1)    -- vanilla: no squish
+  end
+  if self.maxnum ~= nil then self.maxnum:Hide() end
+  -- Wrap OnGainFocus/OnLoseFocus AFTER CS has wrapped them, to undo CS's undesired effects:
+  -- OnGainFocus: call full chain (vanilla + mods), then hide maxnum.
+  -- OnLoseFocus: call full chain (which CS ends with num:Show()), then re-apply our visibility
+  --              logic (_apply_hp_number_visibility hides num unless hp_number_always is true).
+  local _prev_gain = self.OnGainFocus
+  self.OnGainFocus = function(s)
+    _prev_gain(s)
+    if s.maxnum ~= nil then s.maxnum:Hide() end
+  end
+  local _prev_lose = self.OnLoseFocus
+  self.OnLoseFocus = function(s)
+    _prev_lose(s)
+    if s.maxnum ~= nil then s.maxnum:Hide() end
+    s:_apply_hp_number_visibility(true) -- re-apply our config (hides num if not hp_number_always)
+  end
 
   -- player name label above the badge
   self.name = self:AddChild(Text(BODYTEXTFONT, 20))
@@ -74,12 +96,40 @@ local PartyBadge = Class(Badge, function(self, owner)
   -- Its absolute number is shown only on hover (default Badge focus behaviour).
   self.hungerbadge = self:AddChild(Badge(nil, owner, HUNGER_TINT, "status_hunger", nil, nil, true))
   if self.hungerbadge.bg ~= nil then self.hungerbadge.bg:Hide() end
+  if self.hungerbadge.num ~= nil then
+    self.hungerbadge.num:SetPosition(3, 0, 0)
+    self.hungerbadge.num:SetScale(1, 1, 1)
+    self.hungerbadge.num:Hide() -- hidden until hover
+  end
+  if self.hungerbadge.maxnum ~= nil then self.hungerbadge.maxnum:Hide() end
+  local _hb_gain = self.hungerbadge.OnGainFocus
+  self.hungerbadge.OnGainFocus = function(s)
+    _hb_gain(s); if s.maxnum ~= nil then s.maxnum:Hide() end
+  end
+  local _hb_lose = self.hungerbadge.OnLoseFocus
+  self.hungerbadge.OnLoseFocus = function(s)
+    _hb_lose(s); if s.maxnum ~= nil then s.maxnum:Hide() end; s.num:Hide()
+  end
   self.hungerbadge:SetScale(SUB_SCALE)
   self.hungerbadge:SetPosition(-SUB_X, SUB_Y, 0)
 
   -- v2026.6 sanity sub-ring (orange), below-right of the main ring
   self.sanitybadge = self:AddChild(Badge(nil, owner, SANITY_TINT, "status_sanity", nil, nil, true))
   if self.sanitybadge.bg ~= nil then self.sanitybadge.bg:Hide() end
+  if self.sanitybadge.num ~= nil then
+    self.sanitybadge.num:SetPosition(3, 0, 0)
+    self.sanitybadge.num:SetScale(1, 1, 1)
+    self.sanitybadge.num:Hide()
+  end
+  if self.sanitybadge.maxnum ~= nil then self.sanitybadge.maxnum:Hide() end
+  local _sb_gain = self.sanitybadge.OnGainFocus
+  self.sanitybadge.OnGainFocus = function(s)
+    _sb_gain(s); if s.maxnum ~= nil then s.maxnum:Hide() end
+  end
+  local _sb_lose = self.sanitybadge.OnLoseFocus
+  self.sanitybadge.OnLoseFocus = function(s)
+    _sb_lose(s); if s.maxnum ~= nil then s.maxnum:Hide() end; s.num:Hide()
+  end
   self.sanitybadge:SetScale(SUB_SCALE)
   self.sanitybadge:SetPosition(SUB_X, SUB_Y, 0)
 
