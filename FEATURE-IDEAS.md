@@ -35,6 +35,12 @@
 - **(v2026.8)版面強化**:proportional-scale 換欄數穩定(縮放/小視窗不再塌成一欄)、per-column 高度(只有最右欄留地圖鍵空間)、閃避雨量計與角色第二排徽章(Abigail / 靈感)、**背包感知**(側背包左移 / 整合式背包底部預留,開關/裝卸/換背包即時反應)、死亡骷髏置中。
 - **(v2026.9)crash 修正**:修掉 v2026.8 潛伏的伺服器 crash(裸 `tonumber` 不在 modmain 沙箱環境 → 玩家加入洞穴叢集時 master shard 爆)。教訓寫進 `dst-mod-crash-audit` skill(沙箱 global 白名單 + pause_when_empty 遮蔽 sim-tick task 的 load-smoke 盲點)。
 - **(v2026.10)低 HP 警示**:隊友 HP 低於門檻時徽章邊框**平滑紅色呼吸**(circleframe 通道,與火焰脈動共存;遠距/跨-shard 也脈動)。每人選項 **Low-HP Alert: Off / 40% / 25%(預設) / 15%**(占 max HP)。無音效(刻意)。
+- **(v2026.12)隊友頭像 + 名字配色**:每個 badge 可顯示隊友的角色頭像 —— 角落小頭像(Corner)或在 HP 環中央的動畫角色臉(Centred);頭像反映玩家的角色 skin,遠距/跨-shard 隊友也顯示。置中樣式下著火/過熱/失溫/HP 速率箭頭出現時自動翻成角落(讓箭頭不被臉擋)。名字配色(Colour Teammate Names):每人名字染成其玩家顏色。
+- **(v2026.13)Skip-self 跨 shard 修正**:「顯示自己的 badge: Skip」在開啟跨 shard 時不再重新出現為變暗的「far」badge。
+- **(v2026.14)Combined Status 相容 + hover 優化**:
+  - 同時安裝 **Combined Status**(Workshop 376333686)時 badge 正確對齊 HP 環位置;CS 加的數字背景方框、badge 縮小、強制顯示數字等 side-effect 全部消除,hover-only 行為保留。
+  - 變暗(遠距/Caves/Surface)badge 的 hover 數字不再在 ~0.5s 後閃回變暗 —— 整個 hover 期間維持完全可見。
+  - 排版補償現通用於任何縮放 HUD anchor 的 mod。
 
 ---
 
@@ -62,12 +68,9 @@
 - **是什麼**:隊友 HP 低於門檻時 badge 警示。
 - **狀態**:**v2026.10 已實現** —— 徽章邊框(circleframe)**平滑紅色呼吸**(1.2s sine breathe,用現成 `Lerp`),每人選項 `Low-HP Alert: Off/40/25/15`(占 max HP)。與火焰/過熱/失溫脈動**共存**(不同元件 = warning pulse vs circleframe),遠距/跨-shard 徽章也脈動。**無音效**(co-op 易刷,刻意不做)。實作上沒沿用 thermal 的 `StartWarning`(那是單一連續脈動通道),而是另起 circleframe + `StartUpdating/OnUpdate` 逐幀 lerp,經單一寫入者 `_apply_frame_colour` 與 foreign-dim 協調。保留此條僅作紀錄;不再是 backlog 項目。
 
-### 3. 角色頭像 + 名字配色  ✅
+### 3. 角色頭像 + 名字配色  — ✅ 已出貨 (v2026.12)
 - **是什麼**:環中心放該角色的 avatar 圖(取代通用環),名字用玩家自己的顏色。
-- **為什麼**:一眼認人,**視覺上和其他每個長得一樣的 PartyHUD 拉開差距**。
-- **靈感**:Global Positions(地圖上的 per-player 顏色);頭像是社群常見許願。
-- **價值 高 / 工時 中**。角色 avatar atlas 遊戲本身就有,prefab → portrait 對應即可;玩家顏色 client 端拿得到。
-- **實作提示**:mod 角色要處理 fallback;avatar 載入時機 vs badge 建構順序要注意(參考 Global Positions 用 `GetClientTable()` 重建外觀的做法)。
+- **狀態**:**v2026.12 已實現** —— Centred head(環中央動畫臉)/ Corner(角落小頭像)/ Off 三段選項;反映 skin;遠距/跨-shard 也顯示;置中樣式下熱效果箭頭出現時自動翻角落。名字配色選項 Colour Teammate Names。保留此條僅作紀錄;不再是 backlog 項目。
 
 ### 4. 精簡/詳細模式切換 + 隱藏 HUD 熱鍵  ✅
 - **是什麼**:一鍵在「只有環的迷你 badge」與「完整 stat badge」之間切換;另一鍵整個收起 party HUD。
@@ -107,8 +110,8 @@
 ### 視覺
 | 點子 | 是什麼 | 靈感來源 | 價值/工時/限制 |
 |---|---|---|---|
-| 角色頭像 | 環中心放 avatar | (隊友 mod 空白) | 高 / 中(見 Top 5 #3) |
-| 名字配色 | 每人名字用其顏色 | Global Positions | 中 / 低。玩家顏色 client 可取,易讀性提升 |
+| 角色頭像 | 環中心放 avatar | (隊友 mod 空白) | ✅ **已出貨 v2026.12**(Corner / Centred head / Off;含 skin;跨 shard 也顯示) |
+| 名字配色 | 每人名字用其顏色 | Global Positions | ✅ **已出貨 v2026.12**(Colour Teammate Names 選項) |
 | **名字字體大小選項** | 用設定切換名字字型大小:小 / 中 / 大 | (使用者需求) | 中 / **低**。純 client 視覺選項(`client = true` config,`GetModConfigData("name", true)` 取本地值);名字 Text widget 已存在,只需把寫死的 `SetSize(...)` 改成讀設定值的對應字級。注意:字變大時要連動 badge 的縱向預留/排版(`compute_percol`/`layout_badges`),否則大字會疊到下一列;跨 shard 的 "elsewhere" 名字標籤(`SetForeign` 的 soft-blue label)也應一併套用同一字級。屬「好做的小品質選項」。 |
 | 精簡/詳細切換 | 一鍵切密度 | Full Stats(`\`) | 高 / 低(見 Top 5 #4) |
 | 隱藏 HUD 熱鍵 | 綁鍵收起整個 party HUD | Full Stats | 中 / 低。純 client keybind |
@@ -172,7 +175,7 @@ DST 每個角色除了血/餓/智三圍,還各有一條**獨門機制條**。這
 - **PartyHUD - Team Health Display**(782961570,原始版,HP-only)
 - **Full Stats Party HUD - Beta**(2507838386,HP+飢餓+理智、暱稱、骷髏、切換鍵)
 - **Better PartyHUD [Server-Side]**(1744248564,移到右上角)
-- **Combined Status**:<https://github.com/rezecib/Combined-Status>(數值/溫度/hover,**client-only,非跨 shard**)
+- **Combined Status**:<https://github.com/rezecib/Combined-Status>(數值/溫度/hover,**client-only,非跨 shard**)。**v2026.14 已全面相容** —— CS 的 `AddClassPostConstruct` side-effect(bg 方框、badge 縮小、num 外移、hover 強制顯示、HUD anchor rescale + sidepanel 位移)全部消除;詳見 `.claude/skills/dst-badge-visual-audit` item 11a。
 - **Global Positions**:<https://github.com/rezecib/Global-Positions>(地圖位置、ping、顏色;carrier-entity 渲染模式參考)
 - **Status Announcements**(343753877)
 - Monster/Simple/Epic Healthbars(786566397 / 1608490902 / 1185229307,頭上血條點子)
