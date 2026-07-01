@@ -55,6 +55,11 @@ A modernized fork of [PartyHUD](https://github.com/brianchenito/PartyHud) by **b
 ### Fixed in 2026.13
 - **"Show Your Own Badge: Skip" now actually hides your badge.** With cross-shard teammates enabled (the default), your own badge used to reappear as a dimmed "far" badge even after you chose to skip it — your record arrives over the always-replicated cross-shard broadcast, and the skip only applied to the local pass. It's now suppressed on both. No change if you keep your own badge shown.
 
+### New in 2026.14 — Combined Status compatibility + hover polish
+- **Combined Status mod** (Workshop 376333686) is now compatible: when installed together, badges correctly align to the HP ring position, the stat-number background box added by CS is removed, badge scale is restored to normal, and hover-only number behaviour is preserved regardless of CS's settings.
+- **Hover numbers on far / Caves / Surface badges no longer flicker**: the HP, hunger, and sanity numbers now stay fully visible for the entire hover, instead of fading back to dim within half a second.
+- Layout compensation is now generalised to handle **any mod that rescales the HUD root** (not just Combined Status).
+
 ## Install (server mod)
 Subscribe on the Workshop, **or** place this folder into your server's `mods/` as `partyhud` and enable it in each shard's `modoverrides.lua`:
 ```lua
@@ -174,6 +179,13 @@ to work on current Don't Starve Together builds.
     cross-shard broadcast and the skip only applied to the local pass. Now suppressed on both
 [/list]
 
+[b]New in 2026.14 — Combined Status compatibility + hover polish[/b]
+[list]
+[*] Compatible with the [b]Combined Status[/b] mod (Workshop 376333686): badges now correctly align to the HP ring position, CS's stat-number background box is removed from our badges, badge scale is restored to normal, and hover-only number behaviour is preserved
+[*] Hover numbers on dimmed (far / Caves / Surface) badges no longer flicker back to dim — they stay fully readable for the entire hover
+[*] Layout compensation now handles any mod that rescales the HUD anchor, not just Combined Status
+[/list]
+
 [b]Settings (each player picks their own)[/b]
 [list]
 [*] HUD Layout: Horizontal / Vertical
@@ -281,6 +293,13 @@ Thanks for the original work!
 [*] 「Show Your Own Badge:Skip(隱藏自己的徽章)」現在真的會隱藏。開啟跨-shard 隊友(預設)時,你自己的
     徽章會以變暗的「far」樣式重新出現 —— 你的資料會透過跨-shard 廣播傳來,而原本的隱藏只套用在本地那一輪。
     現在兩條路徑都會抑制。若你保持顯示自己的徽章則無變化
+[/list]
+
+[b]2026.14 新增 —— Combined Status 相容性與 hover 優化[/b]
+[list]
+[*] 相容 [b]Combined Status[/b] mod(Workshop 376333686):同時啟用時,徽章現在會正確對齊 HP 環位置;CS 加在徽章上的數字背景方框已移除;徽章大小恢復正常;hover 才顯示數字的設定不再被 CS 覆蓋
+[*] 變暗(遠距 / Caves / Surface)徽章的 hover 數字不再閃爍回變暗 —— 整個 hover 期間都保持完全可見
+[*] 排版補償現在適用於任何縮放 HUD 錨點的 mod,不限於 Combined Status
 [/list]
 
 [b]設定(每位玩家各自選擇)[/b]

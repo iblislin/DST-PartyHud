@@ -2,7 +2,7 @@ name = "PartyHud 2026"
 description =
   "A DST mod that displays the health, hunger, sanity, on-fire and temperature (overheating/freezing) status of other players. Set Position and layout in config."
 author = "iblislin (DST 2026 port); original PartyHUD by brianchenito"
-version = "2026.13"
+version = "2026.15"
 forumthread = ""
 
 api_version = 10 -- the current version of the modding api
@@ -84,17 +84,6 @@ configuration_options = {
       { description = "Hide", data = 0 },
     },
     default = 1,
-    client = true,
-  },
-  {
-    name = "debug_showall",
-    label = "[Test] Show mock badges",
-    hover = "Fill empty slots with fake teammates to preview the HUD layout. Only you see this; it does not affect other players.",
-    options = {
-      { description = "Off", data = 0 },
-      { description = "On", data = 1 },
-    },
-    default = 0,
     client = true,
   },
   {
@@ -194,3 +183,32 @@ configuration_options = {
     client = true,
   },
 }
+
+-- The "[Test] Show mock badges" option (debug_showall) is DEV-ONLY. Discriminator: a RELEASE version
+-- is purely numeric + dots (e.g. "2026.13", "2026.14", a patch "2026.13.1"); a dev/beta/rc build carries
+-- an ALPHABETIC suffix (e.g. "2026.14dev2", "2026.13rc1", "2026.12b1"). So "version contains a letter"
+-- == dev build. (We use letter-presence rather than a "^%d+%.%d+$" shape so a patch release like
+-- "2026.13.1" is still treated as a release. Assumes release tags stay letter-free, which our YYYY.N(.P)
+-- convention guarantees.) This logic is busted-tested in scripts/partyhud_version.lua (is_dev_build);
+-- modinfo can't require(), so the one-liner below MIRRORS it -- keep the two in sync. On a RELEASE
+-- build we OMIT the option entirely, which both:
+--   (1) HIDES it from the mod-config UI, so a player can't enable it by accident (the "mock HUD popup"
+--       complaint = a teammate-less player who toggled this on and saw fake "PlayerN" badges), and
+--   (2) FORCE-DISABLES it even for a player who previously turned it on: GetModConfigData is driven by
+--       the configuration_options list, so an unknown option name returns nil (orphaned saved values
+--       are never resurfaced) -> modmain's `GetModConfigData("debug_showall", true) == 1` is false.
+-- Only dev/beta builds expose it (for our own layout preview). `version` is the global set at the top
+-- of this same modinfo chunk.
+if version:match("%a") ~= nil then
+  configuration_options[#configuration_options + 1] = {
+    name = "debug_showall",
+    label = "[Test] Show mock badges",
+    hover = "Fill empty slots with fake teammates to preview the HUD layout. Only you see this; it does not affect other players.",
+    options = {
+      { description = "Off", data = 0 },
+      { description = "On", data = 1 },
+    },
+    default = 0,
+    client = true,
+  }
+end
